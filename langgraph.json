@@ -1,0 +1,16 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "ctrip_agent": {
+      "path": "graph_chat.finally_graph:graph",
+      "title": "出行规划智能助手",
+      "description": "出行规划智能助手，支持航班预定、酒店查询、行程规划等服务"
+    }
+  },
+  "env": {
+    "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+    "OPENAI_BASE_URL": "${OPENAI_BASE_URL}"
+  }
+}

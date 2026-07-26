@@ -1,0 +1,86 @@
+# ========== Python 缓存 & 编译文件 ==========
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境（你的anaconda环境）
+venv/
+env/
+.venv/
+Anaconda/
+env_*/
+
+# ========== 日志、临时文件 ==========
+logs/
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+
+# ========== 前端Vue / Vite ==========
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.nuxt/
+frontend/.idea/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-lock.yaml
+frontend/.DS_Store
+
+# ========== 环境配置【重点！不要上传密钥】 ==========
+.env
+.env.local
+.env.dev
+.env.prod
+*.env
+
+# ========== 数据库、向量库持久化文件 ==========
+*.db
+*.sqlite
+*.sqlite3
+chroma_db/
+vector_store/
+pg_data/
+
+# ========== Docker 相关 ==========
+.dockerignore
+
+# ========== IDE 编辑器缓存 ==========
+.idea/
+.idea/**
+.vscode/.cursor-index/
+.vscode/.DS_Store
+.vscode/**/.cursor-index
+*.code-workspace
+.DS_Store
+Thumbs.db
+
+# ========== 爬虫导出、临时数据文件 ==========
+export_data/
+temp_data/
+*.csv
+*.xlsx
+
+# ========== 系统隐藏文件 ==========
+.DS_Store
+Thumbs.db

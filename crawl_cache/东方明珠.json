@@ -1,0 +1,18 @@
+[
+  {
+    "poi_name": "东方明珠",
+    "city": null,
+    "source": "sample",
+    "rating": 4.8,
+    "label": "推荐",
+    "content": "东方明珠 适合打卡，评论普遍认为风景好、拍照出片。"
+  },
+  {
+    "poi_name": "东方明珠",
+    "city": null,
+    "source": "sample",
+    "rating": 4.5,
+    "label": "注意排队",
+    "content": "东方明珠 周末人流较大，建议错峰前往。"
+  }
+]
