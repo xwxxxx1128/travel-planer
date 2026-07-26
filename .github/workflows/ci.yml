@@ -26,6 +26,8 @@ jobs:
         pip install pytest pytest-cov
     
     - name: 运行测试
+      env:
+        OPENAI_API_KEY: dummy-ci-key-not-real
       run: |
         pytest tests/ -v --cov=api --cov=db --cov=utils --cov-report=xml
     
