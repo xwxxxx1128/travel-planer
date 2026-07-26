@@ -41,6 +41,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     needs: test
+    # 仅在配置了 Docker Hub 凭证时才执行构建/推送，缺凭证时自动跳过，不阻塞测试
+    if: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_PASSWORD != '' }}
     
     steps:
     - name: 检出代码
@@ -70,7 +72,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.DOCKER_USERNAME != ''
     
     steps:
     - name: 检出代码
