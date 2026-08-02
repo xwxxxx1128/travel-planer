@@ -3,8 +3,9 @@ services:
   backend:
     build: .
     container_name: ctrip_backend
-    ports:
-      - '8000:8000'
+    # 仅 Docker 内网暴露，不映射到宿主机公网端口；统一由前端 3000 的 nginx 反代访问
+    expose:
+      - '8000'
     env_file:
       - .env
     environment:
@@ -19,38 +20,31 @@ services:
   chroma:
     image: chromadb/chroma:latest
     container_name: ctrip_chroma
-    ports:
-      - '8001:8000'
+    # 仅内网互通，不暴露公网端口
+    expose:
+      - '8000'
     volumes:
       - chroma_data:/chroma/chroma
     restart: unless-stopped
 
-  postgres:
-    image: postgres:16-alpine
-    container_name: ctrip_postgres
-    environment:
-      POSTGRES_DB: ctrip
-      POSTGRES_USER: ctrip
-      POSTGRES_PASSWORD: ctrip
-    ports:
-      - '5432:5432'
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-    restart: unless-stopped
+  # 注意：原 postgres 服务已移除。项目默认使用 sqlite（见 DATABASE_URL），
+  # 由 backend 的 volumes 持久化到宿主机 system.db，2G 内存机器更省资源。
+  # 若日后需切换 postgres，请单独引入并仅 expose 内网端口，切勿映射 5432 到公网。
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # 地图 JS API Key 构建期注入（与 .env 中的 VITE_AMAP_JS_API_KEY 保持一致）
+        - VITE_AMAP_JS_API_KEY=${VITE_AMAP_JS_API_KEY}
     container_name: ctrip_frontend
     ports:
-      - '3000:3000'
-    environment:
-      - VITE_API_BASE_URL=http://backend:8000
+      # 公网只暴露这一个端口；nginx 内部把 /api 透传到 backend:8000
+      - '3000:80'
     depends_on:
       - backend
     restart: unless-stopped
 
 volumes:
-  pg_data:
   chroma_data:
