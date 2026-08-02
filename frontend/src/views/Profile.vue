@@ -9,8 +9,11 @@
       </template>
 
       <el-form :model="form" label-position="top" class="profile-form">
+        <el-alert type="info" :closable="false" show-icon class="secret-tip"
+          title="出于安全考虑，API Key 已脱敏展示；留空或显示 **** 时表示保留原值，不会覆盖服务器现有配置。" />
+
         <el-form-item label="大模型 API Key">
-          <el-input v-model="form.openai_api_key" type="password" show-password placeholder="请输入大模型 API Key" />
+          <el-input v-model="form.openai_api_key" type="password" show-password placeholder="如需修改请填入新的 Key" />
         </el-form-item>
 
         <el-form-item label="大模型 API 地址">
@@ -18,11 +21,11 @@
         </el-form-item>
 
         <el-form-item label="高德 Web API Key">
-          <el-input v-model="form.amap_web_key" type="password" show-password placeholder="请输入高德 Web API Key" />
+          <el-input v-model="form.amap_web_key" type="password" show-password placeholder="如需修改请填入新的 Key" />
         </el-form-item>
 
         <el-form-item label="高德 JS API Key">
-          <el-input v-model="form.amap_js_key" type="password" show-password placeholder="请输入高德 JS API Key" />
+          <el-input v-model="form.amap_js_key" type="password" show-password placeholder="如需修改请填入新的 Key" />
         </el-form-item>
 
         <div class="action-row">
@@ -65,7 +68,14 @@ const loadConfig = async () => {
 const saveConfig = async () => {
   saving.value = true
   try {
-    await configApi.saveRuntimeConfig(form)
+    // 脱敏占位符（含 ****）或空值视为"不修改"，提交前清掉，避免覆盖服务器真实 Key
+    const payload = {
+      openai_api_key: /[*]{2,}/.test(form.openai_api_key) ? '' : form.openai_api_key,
+      openai_base_url: form.openai_base_url,
+      amap_web_key: /[*]{2,}/.test(form.amap_web_key) ? '' : form.amap_web_key,
+      amap_js_key: /[*]{2,}/.test(form.amap_js_key) ? '' : form.amap_js_key,
+    }
+    await configApi.saveRuntimeConfig(payload)
     ElMessage.success('配置已保存')
     await loadConfig()
   } catch (error) {
@@ -88,5 +98,6 @@ onMounted(loadConfig)
 .profile-header { display: flex; align-items: center; justify-content: space-between; }
 .hint { color: #64748b; font-size: 12px; }
 .profile-form { display: grid; gap: 6px; }
+.secret-tip { margin-bottom: 12px; }
 .action-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
 </style>

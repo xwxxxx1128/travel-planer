@@ -1,5 +1,4 @@
-﻿version: '3.9'
-services:
+﻿services:
   backend:
     build: .
     container_name: ctrip_backend
@@ -35,9 +34,10 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      # 高德 JS API Key 是前端公开使用的，构建期注入（Vite 仅在构建时可见）
       args:
-        # 地图 JS API Key 构建期注入（与 .env 中的 VITE_AMAP_JS_API_KEY 保持一致）
         - VITE_AMAP_JS_API_KEY=${VITE_AMAP_JS_API_KEY}
+
     container_name: ctrip_frontend
     ports:
       # 公网只暴露这一个端口；nginx 内部把 /api 透传到 backend:8000

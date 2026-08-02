@@ -235,13 +235,19 @@ let routeEndpointMarkers = []
 
 const amapJsKey = ref((import.meta.env.VITE_AMAP_JS_API_KEY || import.meta.env.VITE_AMAP_KEY || '').trim())
 
-const currentAmapKey = () => amapJsKey.value.trim() || runtimeConfig.value.amap_js_key?.trim() || ''
+// 后端返回的 amap_js_key 已脱敏（如 6cb0****e07），不可作为真实 Key 使用
+const isMasked = (v) => !v || /[*]{2,}/.test(v)
+
+const currentAmapKey = () => amapJsKey.value.trim() || (isMasked(runtimeConfig.value.amap_js_key) ? '' : runtimeConfig.value.amap_js_key?.trim()) || ''
 
 const loadRuntimeConfig = async () => {
   try {
     const config = await configApi.getRuntimeConfig()
     runtimeConfig.value = config || {}
-    if (!amapJsKey.value && config?.amap_js_key) amapJsKey.value = config.amap_js_key.trim()
+    // 仅当构建期未注入、且运行时返回的是真实 Key（非脱敏）时才采用
+    if (!amapJsKey.value && config?.amap_js_key && !isMasked(config.amap_js_key)) {
+      amapJsKey.value = config.amap_js_key.trim()
+    }
   } catch (error) {
     console.warn('load runtime config failed', error)
   }
