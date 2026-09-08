@@ -46,5 +46,25 @@
       - backend
     restart: unless-stopped
 
+  # 路线规划 MCP Server（SSE 模式常驻）：把 route_planner 能力以 MCP 协议对外暴露，
+  # 与 backend 共享镜像与代码，仅启动命令不同。仅内网 expose，不映射公网端口。
+  mcp-route:
+    build: .
+    container_name: ctrip_mcp_route
+    expose:
+      - '8001'
+    env_file:
+      - .env
+    environment:
+      - MCP_TRANSPORT=sse
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8001
+    command: ['python', 'tools/mcp_route_server.py']
+    volumes:
+      - .:/app
+    restart: unless-stopped
+    depends_on:
+      - backend
+
 volumes:
   chroma_data:

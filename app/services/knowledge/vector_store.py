@@ -46,3 +46,54 @@ class ChromaStore:
         documents = result.get('documents', [[]])[0]
         metadatas = result.get('metadatas', [[]])[0]
         return [{**meta, 'content': doc} for meta, doc in zip(metadatas, documents)]
+
+    # ------------------------------------------------------------------
+    # 通用文本文档接口（供政策 FAQ 等纯文本知识库的 RAG 召回使用）
+    # 与上面的 reviews 接口共用同一个 Chroma 客户端，只是集合名与元数据不同。
+    # ------------------------------------------------------------------
+    def available(self) -> bool:
+        """chroma 是否可用（上层据此决定走向量库还是降级到内存 / numpy）。"""
+        return self._client is not None
+
+    def count(self, collection_name: str = 'policy_faq') -> int:
+        """返回指定集合的文档数量（chroma 不可用时为 0）。"""
+        if self._client is None:
+            return 0
+        return self._client.get_or_create_collection(collection_name).count()
+
+    def upsert_documents(
+        self,
+        documents: list[str],
+        collection_name: str = 'policy_faq',
+        embeddings: list | None = None,
+    ) -> None:
+        """
+        写入文本片段到指定集合。
+        :param embeddings: 若提供则直接写入预计算向量（保证与查询向量同属一个 embedding 空间）；
+                           不提供则交由 chroma 默认 embedding 函数处理。
+        """
+        if self._client is None:
+            with self._fallback_file().open('a', encoding='utf-8') as handle:
+                for doc in documents:
+                    handle.write(json.dumps({'page_content': doc}, ensure_ascii=False) + '\n')
+            return
+
+        collection = self._client.get_or_create_collection(collection_name)
+        ids = [f'doc-{index}' for index in range(len(documents))]
+        if embeddings is not None:
+            collection.upsert(ids=ids, documents=documents, embeddings=embeddings)
+        else:
+            collection.upsert(ids=ids, documents=documents)
+
+    def query_documents(
+        self,
+        query_embedding: list[float],
+        collection_name: str = 'policy_faq',
+        top_k: int = 3,
+    ) -> list[str]:
+        """用预计算的查询向量在指定集合里取 top-k 最相似片段（返回文档原文列表）。"""
+        if self._client is None:
+            return []
+        collection = self._client.get_or_create_collection(collection_name)
+        result = collection.query(query_embeddings=[query_embedding], n_results=top_k)
+        return result.get('documents', [[]])[0]

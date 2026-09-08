@@ -2,7 +2,11 @@ import itertools
 import json
 from concurrent.futures import ThreadPoolExecutor
 from math import sqrt
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+# 路线距离工具改为经 MCP 协议调用独立部署的路线服务，因此这里依赖 MCP 客户端封装。
+# 说明：mcp_route_client 不会反向依赖本模块，因此不会产生循环导入。
+from tools.mcp_route_client import RouteMcpClient
 
 import httpx
 from langchain_core.tools import tool
@@ -593,18 +597,41 @@ def plan_route(destinations: List[str], start_point: str = "", transport_mode: s
         return f"路径规划失败：{str(e)}"
 
 
-@tool(description="获取两点之间的路程和时间工具，根据交通方式计算两点之间的距离和预计时间")
-def get_route_distance(origin: str, destination: str, transport_mode: str = "driving") -> str:
+# 复用 MCP 客户端，避免每次工具调用都重新拉起子进程 / 重连 SSE（长连接复用）。
+_mcp_client: Optional[RouteMcpClient] = None
+
+
+async def _get_route_mcp_client() -> RouteMcpClient:
+    """懒加载并复用 MCP 路线服务客户端（local 模式复用子进程，remote 模式复用 SSE 长连接）。"""
+    global _mcp_client
+    if _mcp_client is None:
+        _mcp_client = RouteMcpClient()
+        await _mcp_client.connect()
+    return _mcp_client
+
+
+@tool(
+    description=(
+        "获取两点之间的路程和时间工具，通过 MCP 路线规划服务调用"
+        "（底层经独立部署的 route MCP Server，与核心逻辑解耦，便于服务化扩展）。"
+    )
+)
+async def get_route_distance(origin: str, destination: str, transport_mode: str = "driving") -> str:
     """
-    获取两点之间的路程和时间。
+    获取两点之间的路程和时间。该工具通过 MCP 协议调用路线规划服务，
+    与直接调用核心函数解耦，便于把路线能力独立部署 / 横向扩展。
     """
     try:
-        result = get_route_distance_core(origin, destination, transport_mode)
-        return (
-            f"从{result['from']}到{result['to']}：\n"
-            f"- 距离：{result['distance']}米（约{result['distance_km']}公里）\n"
-            f"- 预计时间：{result['duration']}秒（约{result['duration_minutes']}分钟）\n"
-            f"- 交通方式：{result['transport_mode_label']}"
-        )
+        client = await _get_route_mcp_client()
+        result = await client.get_route_distance(origin, destination, transport_mode)
+        if isinstance(result, dict) and "from" in result:
+            return (
+                f"从{result['from']}到{result['to']}：\n"
+                f"- 距离：{result['distance']}米（约{result['distance_km']}公里）\n"
+                f"- 预计时间：{result['duration']}秒（约{result['duration_minutes']}分钟）\n"
+                f"- 交通方式：{result['transport_mode_label']}"
+            )
+        # 非预期结构（如 MCP 调用返回错误）直接透出原始信息
+        return f"获取路线失败：{result}"
     except Exception as e:
         return f"获取路线失败：{str(e)}"

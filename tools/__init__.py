@@ -28,3 +28,6 @@ from tools.route_planner import (
     plan_route,
     get_route_distance
 )
+
+# 导出路线规划 MCP 客户端封装（按 MCP 协议调用，解耦内部实现）
+from tools.mcp_route_client import RouteMcpClient
