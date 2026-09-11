@@ -17,6 +17,9 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = Field(default=f'sqlite:///{BASE_DIR / "system.db"}')
     CHROMA_PERSIST_DIR: str = Field(default=str(BASE_DIR / 'chroma_db'))
+    # 独立 Chroma 向量服务地址（如 docker-compose 内的 chroma 服务 http://chroma:8000）。
+    # 配置后向量库走 HTTP 服务；留空则退回本地嵌入式 PersistentClient（便于本地开发）。
+    CHROMA_HTTP_URL: str = ''
 
     OPENAI_API_KEY: str = ''
     OPENAI_BASE_URL: str = ''

@@ -1,106 +1,208 @@
-"""景点/地点用户评价查询工具。
+"""景点评价检索工具（基于 Tavily 网页搜索）。
 
-原仓库中该文件缺失（从未提交至 git），此处基于项目内 reviews 表结构
-（见 app/models/review.py：poi_name / source / rating / label / content）重建，
-供 graph_chat.assistant 的主助理工具集使用。
+评价功能不再使用自研爬虫抓取，改为调用 Tavily 网页搜索 MCP 工具获取互联网公开
+游记/攻略材料（标题、摘要、来源链接），交由大模型基于这些材料聚合提炼游客评价。
 
-约定（与 graph_chat/assistant.py 提示词一致）：
-- 正常时返回「评价列表」的 JSON 字符串（每条含 poi_name / source / rating / label / content）；
-- 当数据库中没有该景点的评价数据时，返回包含 'fallback': True 的结果，
-  以便 LLM 退而使用自身知识为用户撰写介绍。
-
-数据库路径统一取自 tools.db（其来源为 app.core.config.TRAVEL_DB_PATH）。
+关键约束（对应需求）：
+- 大模型仅基于 API 返回的网页材料做聚合，严禁编造；
+- 返回材料时一并提供可跳转的原始来源链接；
+- 检索结果按「地点 + 城市 + time_range + max_results」缓存到本地 reviews 表
+  （见 app/models/review.py）：同一地点在 REVIEW_CACHE_TTL_DAYS（默认 30 天，
+  与 time_range=month 对齐）内再次询问时优先从库里返回，避免每次都现调 Tavily；
+  force_refresh=True 可强制刷新。缓存读写异常时优雅降级为「直接现检索」。
+- 若检索命中有限（部分站点反爬仅返回摘要），如实呈现有限信息；未命中则如实告知。
 """
-from __future__ import annotations
 
-import json
-import sqlite3
-from typing import Any, Dict, List
+import asyncio
+import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
 from langchain_core.tools import tool
-from tools import db
+
+from tools.mcp_tavily_client import TavilyMcpClient
+
+logger = logging.getLogger(__name__)
+# 单次检索返回条数（可通过环境变量调整）
+_TAVILY_MAX_RESULTS = int(os.getenv("TAVILY_MAX_RESULTS", "5"))
+# 评价检索的时效范围：召回近一个月内的联网材料（温和时效，契合「比较新的内容」需求）。
+_TAVILY_REVIEW_TIME_RANGE = os.getenv("TAVILY_REVIEW_TIME_RANGE", "month")
+# 评价缓存有效期（天）：与 time_range=month 对齐，默认 30 天。
+_REVIEW_CACHE_TTL_DAYS = int(os.getenv("REVIEW_CACHE_TTL_DAYS", "30"))
 
 
-# 单次最多返回的评价条数，避免超长上下文拖慢后续 LLM 调用。
-# 原 50 条会把单条工具结果撑到数千字，直接占满历史裁剪预算、压慢下一轮 LLM；
-# 8 条已足够覆盖展示与信息量，显著削减喂给模型的 token。
-MAX_REVIEWS = 8
+# ----------------------------------------------------------------------
+# 评价缓存（落库）：同一地点一个月内先查库，避免重复调 Tavily。
+# 缓存读写异常时优雅降级为「直接现检索」，不影响主流程。
+# ----------------------------------------------------------------------
+def _cache_lookup(poi_name: str, city: str, time_range: str, max_results: int) -> list[dict] | None:
+    """命中且未过期则返回缓存的评价条目，否则返回 None。"""
+    try:
+        from app.db.session import SessionLocal
+        from app.models.review import Review
+
+        with SessionLocal() as session:
+            now = datetime.now()
+            rows = (
+                session.query(Review)
+                .filter(
+                    Review.poi_name == poi_name,
+                    Review.city == (city or ""),
+                    Review.time_range == time_range,
+                    Review.max_results == max_results,
+                    Review.expires_at > now,
+                )
+                .all()
+            )
+            if not rows:
+                return None
+            return [
+                {
+                    "poi_name": r.poi_name,
+                    "city": r.city or "",
+                    "title": r.title or "",
+                    "url": r.url or "",
+                    "content": r.content,
+                    "source": r.source or "tavily",
+                }
+                for r in rows
+            ]
+    except Exception as exc:  # 表未建/连接异常等
+        logger.warning("评价缓存读取失败（%s）：%s", poi_name, exc)
+        return None
+
+
+def _cache_store(poi_name: str, city: str, time_range: str, max_results: int, items: list[dict]) -> None:
+    """写入本次检索结果，并清理同 key 的旧缓存（含已过期）。"""
+    try:
+        from app.db.session import SessionLocal
+        from app.models.review import Review
+
+        with SessionLocal() as session:
+            session.query(Review).filter(
+                Review.poi_name == poi_name,
+                Review.city == (city or ""),
+                Review.time_range == time_range,
+                Review.max_results == max_results,
+            ).delete()
+            now = datetime.now()
+            expires = now + timedelta(days=_REVIEW_CACHE_TTL_DAYS)
+            for it in items:
+                session.add(
+                    Review(
+                        poi_name=poi_name,
+                        city=city or "",
+                        title=it.get("title", ""),
+                        url=it.get("url", ""),
+                        content=it.get("content", ""),
+                        source=it.get("source", "tavily"),
+                        time_range=time_range,
+                        max_results=max_results,
+                        fetched_at=now,
+                        expires_at=expires,
+                        created_at=now,
+                    )
+                )
+            session.commit()
+    except Exception as exc:  # 表未建/连接异常等：仅记日志，不阻断主流程
+        logger.warning("评价缓存写入失败（%s）：%s", poi_name, exc)
+
+
+# 在任何调用上下文（同步路由 / 异步事件循环内）都能安全跑异步 Tavily 客户端：
+# 丢到独立线程里 asyncio.run，避免「已有运行中的事件循环」冲突。
+def _run_async(coro):
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(asyncio.run, coro).result()
+
+
+async def fetch_tavily_reviews(
+    poi_name: str,
+    city: str = "",
+    max_results: int | None = None,
+    time_range: str | None = None,
+    force_refresh: bool = False,
+) -> list[dict]:
+    """抓取某景点的互联网公开评价/攻略材料（Tavily 网页搜索）。
+
+    返回 [{poi_name, city, title, url, content, source}]，供计划页/评价 agent 直接使用；
+    调用失败或无结果时返回空列表（由上层如实告知，不编造）。
+    非强制刷新且命中未过期缓存时，直接返回库内结果，不再现调 Tavily。
+    """
+    resolved_max = max_results or _TAVILY_MAX_RESULTS
+    resolved_tr = time_range or _TAVILY_REVIEW_TIME_RANGE
+
+    # 缓存优先：同地点一个月内直接返回库内结果
+    if not force_refresh:
+        cached = _cache_lookup(poi_name, city, resolved_tr, resolved_max)
+        if cached is not None:
+            logger.info("评价命中本地缓存（%s / %s）", poi_name, city or "-")
+            return cached
+
+    query = f"{poi_name} 游客真实评价 游玩攻略 游记 推荐"
+    try:
+        async with TavilyMcpClient() as client:
+            items = await client.search(
+                query,
+                max_results=resolved_max,
+                time_range=resolved_tr,
+            )
+    except Exception as exc:  # 无 Key / Server 拉起失败 / 调用异常
+        logger.warning("Tavily 评价检索失败（%s）：%s", poi_name, exc)
+        return []
+
+    # 命中结果落库缓存，供一个月内复用
+    if items:
+        _cache_store(poi_name, city, resolved_tr, resolved_max, items)
+
+    return [
+        {
+            "poi_name": poi_name,
+            "city": city,
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "content": item.get("content", ""),
+            "source": "tavily",
+        }
+        for item in items
+    ]
+
+
+def fetch_tavily_reviews_sync(
+    poi_name: str,
+    city: str = "",
+    max_results: int | None = None,
+    time_range: str | None = None,
+    force_refresh: bool = False,
+) -> list[dict]:
+    """同步封装：供 ReviewRAGAgent / 同步路由调用。"""
+    return _run_async(
+        fetch_tavily_reviews(poi_name, city, max_results, time_range, force_refresh)
+    )
 
 
 @tool
-def search_reviews(poi_name: str) -> str:
-    """根据用户提供的景点/地点名称查询用户评价。
+async def search_reviews(poi_name: str) -> str:
+    """查询指定景点的游客评价/攻略素材。
 
-    参数:
-        poi_name: 景点或地点名称，例如「外滩」「故宫」。
-    返回:
-        JSON 字符串：评价列表（成功），或包含 'fallback': True 的提示结果（缺失/出错）。
+    通过 Tavily 网页搜索获取该景点相关的互联网公开游记、攻略与点评材料
+    （含标题、摘要与来源链接）。请基于返回的材料聚合提炼游客真实评价，
+    并附上原始来源链接；严禁编造内容。材料有限时如实说明，未命中时如实告知。
     """
-    if not poi_name or not poi_name.strip():
-        return json.dumps(
-            {"fallback": True, "poi_name": "", "message": "未提供景点名称。"},
-            ensure_ascii=False,
-        )
+    items = await fetch_tavily_reviews(poi_name)
+    if not items:
+        return f"未检索到「{poi_name}」的相关网络评价材料，暂无法提供游客评价。"
 
-    poi_name = poi_name.strip()
-    try:
-        conn = sqlite3.connect(db)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
+    # 将网页片段实时交给大模型处理；此处仅组装材料（材料已按需从本地缓存或 Tavily 取得）。
+    blocks = []
+    for idx, item in enumerate(items, 1):
+        title = item.get("title", "")
+        url = item.get("url", "")
+        content = item.get("content", "")
+        blocks.append(f"[{idx}] 标题：{title}\n来源链接：{url}\n摘要：{content}")
 
-        # 1) 先精确匹配地点名（最准确）
-        cur.execute(
-            "SELECT poi_name, source, rating, label, content "
-            "FROM reviews WHERE poi_name = ?",
-            (poi_name,),
-        )
-        rows = cur.fetchall()
-
-        # 2) 精确无果则按关键词模糊匹配（提升召回）
-        if not rows:
-            cur.execute(
-                "SELECT poi_name, source, rating, label, content "
-                "FROM reviews WHERE poi_name LIKE ?",
-                (f"%{poi_name}%",),
-            )
-            rows = cur.fetchall()
-
-        conn.close()
-
-        if not rows:
-            return json.dumps(
-                {
-                    "fallback": True,
-                    "poi_name": poi_name,
-                    "message": f"暂无「{poi_name}」的评价数据，请基于常识为用户介绍。",
-                },
-                ensure_ascii=False,
-            )
-
-        reviews: List[Dict[str, Any]] = []
-        for r in rows:
-            rating = r["rating"]
-            reviews.append(
-                {
-                    "poi_name": r["poi_name"],
-                    "source": r["source"],
-                    # 评分可能为 NULL，显式保留为 None 而非 0
-                    "rating": rating if rating is not None else None,
-                    "label": r["label"],
-                    "content": r["content"],
-                }
-            )
-
-        # 限制返回条数，避免上下文过长
-        reviews = reviews[:MAX_REVIEWS]
-        return json.dumps(reviews, ensure_ascii=False)
-    except Exception as exc:  # 表不存在或查询出错时优雅降级
-        return json.dumps(
-            {
-                "fallback": True,
-                "poi_name": poi_name,
-                "error": str(exc),
-                "message": f"查询「{poi_name}」评价时出错。",
-            },
-            ensure_ascii=False,
-        )
+    header = (
+        f"以下是「{poi_name}」的互联网公开游记/攻略材料（共 {len(items)} 条），"
+        f"请仅据此聚合提炼游客评价并附上来源链接："
+    )
+    return header + "\n\n" + "\n\n".join(blocks)

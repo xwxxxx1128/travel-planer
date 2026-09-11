@@ -1,5 +1,5 @@
 ﻿from pathlib import Path
-import json
+from urllib.parse import urlparse
 
 try:
     import chromadb
@@ -15,44 +15,26 @@ class ChromaStore:
         self.persist_dir.mkdir(parents=True, exist_ok=True)
         self._client = None
         if chromadb is not None:
-            self._client = chromadb.PersistentClient(path=str(self.persist_dir))
+            # 优先连独立的 Chroma HTTP 服务（docker-compose 里的 chroma 服务），
+            # 仅在未配置 CHROMA_HTTP_URL 时退回本地嵌入式 PersistentClient（便于本地开发）。
+            if settings.CHROMA_HTTP_URL:
+                self._client = self._build_http_client(settings.CHROMA_HTTP_URL)
+            else:
+                self._client = chromadb.PersistentClient(path=str(self.persist_dir))
 
-    def _fallback_file(self) -> Path:
-        return self.persist_dir / 'reviews.jsonl'
-
-    def upsert_reviews(self, reviews: list[dict], collection_name: str = 'poi_reviews') -> None:
-        if self._client is None:
-            with self._fallback_file().open('a', encoding='utf-8') as handle:
-                for item in reviews:
-                    handle.write(json.dumps(item, ensure_ascii=False) + '\n')
-            return
-
-        collection = self._client.get_or_create_collection(collection_name)
-        documents = [item['content'] for item in reviews]
-        ids = [f"{item.get('poi_name', 'poi')}-{index}" for index, item in enumerate(reviews)]
-        metadatas = [{k: v for k, v in item.items() if k != 'content'} for item in reviews]
-        collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
-
-    def search_reviews(self, query: str, collection_name: str = 'poi_reviews', top_k: int = 3) -> list[dict]:
-        if self._client is None:
-            path = self._fallback_file()
-            if not path.exists():
-                return []
-            rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
-            return [row for row in rows if query.lower() in row.get('poi_name', '').lower() or query in row.get('content', '')][:top_k]
-
-        collection = self._client.get_or_create_collection(collection_name)
-        result = collection.query(query_texts=[query], n_results=top_k)
-        documents = result.get('documents', [[]])[0]
-        metadatas = result.get('metadatas', [[]])[0]
-        return [{**meta, 'content': doc} for meta, doc in zip(metadatas, documents)]
+    @staticmethod
+    def _build_http_client(url: str):
+        parsed = urlparse(url)
+        host = parsed.hostname or url
+        port = parsed.port or 8000
+        # HttpClient 创建时并不立即建连，真正请求时才连 chroma 服务。
+        return chromadb.HttpClient(host=host, port=port)
 
     # ------------------------------------------------------------------
     # 通用文本文档接口（供政策 FAQ 等纯文本知识库的 RAG 召回使用）
-    # 与上面的 reviews 接口共用同一个 Chroma 客户端，只是集合名与元数据不同。
     # ------------------------------------------------------------------
     def available(self) -> bool:
-        """chroma 是否可用（上层据此决定走向量库还是降级到内存 / numpy）。"""
+        """chroma 是否可用（上层据此决定走向量库还是降级到 numpy 内存向量）。"""
         return self._client is not None
 
     def count(self, collection_name: str = 'policy_faq') -> int:
@@ -73,9 +55,8 @@ class ChromaStore:
                            不提供则交由 chroma 默认 embedding 函数处理。
         """
         if self._client is None:
-            with self._fallback_file().open('a', encoding='utf-8') as handle:
-                for doc in documents:
-                    handle.write(json.dumps({'page_content': doc}, ensure_ascii=False) + '\n')
+            # 无 chroma 时的兜底：本路径在实践中不会被 RAG 主流程命中
+            # （lookup_policy 在 chroma 不可用时走 numpy 内存向量），此处仅做无操作。
             return
 
         collection = self._client.get_or_create_collection(collection_name)

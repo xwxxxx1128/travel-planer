@@ -31,3 +31,6 @@ from tools.route_planner import (
 
 # 导出路线规划 MCP 客户端封装（按 MCP 协议调用，解耦内部实现）
 from tools.mcp_route_client import RouteMcpClient
+
+# 导出 Tavily 网页搜索 MCP 客户端封装（评价检索改用 Tavily 公开网页材料）
+from tools.mcp_tavily_client import TavilyMcpClient

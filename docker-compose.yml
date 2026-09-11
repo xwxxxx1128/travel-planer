@@ -1,7 +1,7 @@
 ﻿services:
   backend:
     build: .
-    container_name: ctrip_backend
+    container_name: trip_backend
     # 仅 Docker 内网暴露，不映射到宿主机公网端口；统一由前端 3000 的 nginx 反代访问
     expose:
       - '8000'
@@ -10,15 +10,19 @@
     environment:
       - DATABASE_URL=sqlite:////app/system.db
       - CHROMA_PERSIST_DIR=/app/chroma_db
+      # 独立 Chroma 向量服务（docker-compose 内的 chroma 服务）；留空则退回本地嵌入式向量库
+      - CHROMA_HTTP_URL=http://chroma:8000
       - HOST=0.0.0.0
       - PORT=8000
+      # 方法2：使用镜像内预装好的 Python 版 tavily-mcp 二进制（非 npx/uvx 运行时下载）
+      - TAVILY_MCP_COMMAND=tavily-mcp
     volumes:
       - .:/app
     restart: unless-stopped
 
   chroma:
     image: chromadb/chroma:latest
-    container_name: ctrip_chroma
+    container_name: trip_chroma
     # 仅内网互通，不暴露公网端口
     expose:
       - '8000'
@@ -37,8 +41,7 @@
       # 高德 JS API Key 是前端公开使用的，构建期注入（Vite 仅在构建时可见）
       args:
         - VITE_AMAP_JS_API_KEY=${VITE_AMAP_JS_API_KEY}
-
-    container_name: ctrip_frontend
+    container_name: trip_frontend
     ports:
       # 公网只暴露这一个端口；nginx 内部把 /api 透传到 backend:8000
       - '3000:80'
@@ -50,7 +53,7 @@
   # 与 backend 共享镜像与代码，仅启动命令不同。仅内网 expose，不映射公网端口。
   mcp-route:
     build: .
-    container_name: ctrip_mcp_route
+    container_name: trip_mcp_route
     expose:
       - '8001'
     env_file:

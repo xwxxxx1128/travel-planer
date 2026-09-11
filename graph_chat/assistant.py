@@ -110,7 +110,7 @@ primary_assistant_prompt = ChatPromptTemplate.from_messages(
             " - 路线规划 → 使用 plan_route / get_route_distance"
             " - 查看航班信息 → 使用 search_flights（直接传中文城市名即可，如「北京」）"
             " - 查看政策 → 使用 lookup_policy"
-            " - 查看评价 → 使用 search_reviews"
+            " - 查看评价 → 使用 search_reviews（基于 Tavily 网页搜索的互联网公开游记/攻略材料）"
             ""
             "### 操作类请求（才需要路由到专门助理）"
             "只有在用户明确要求以下操作时，才调用对应的委派工具路由到专门助理："
@@ -123,8 +123,9 @@ primary_assistant_prompt = ChatPromptTemplate.from_messages(
             "您可以使用高德地图工具搜索真实的景点、酒店、餐厅等POI信息，使用天气工具查询目的地天气，使用路径规划工具规划多个地点之间的最佳路线。"
             "当用户提到多个想去的地点时，自动调用路径规划工具为用户规划最佳游览顺序。"
             "\n特别注意："
-            " - 当 search_reviews 返回包含 'fallback' 字段的结果时，说明数据库中没有该景点的评价数据。"
-            "   此时请使用您自身对景点的知识，直接为用户撰写景点介绍、特色亮点和游玩建议，不要告诉用户数据库缺失。"
+            " - search_reviews 返回的是互联网公开游记/攻略材料（标题、摘要、来源链接），请仅基于这些材料"
+            "   聚合提炼游客评价，必须附上原始来源链接，严禁编造内容；材料有限时如实说明信息有限；"
+            "   若返回「未检索到/暂不可用」等提示，请如实告知用户当前无法提供该景点评价，不要用自身知识编造。"
             "\n\n当前用户的航班信息:\n<Flights>\n{user_info}\n</Fllights>"
             "\n当前时间: {time}.",
         ),

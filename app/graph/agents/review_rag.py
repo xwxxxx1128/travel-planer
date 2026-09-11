@@ -1,16 +1,19 @@
-﻿from dataclasses import dataclass
-
-from app.schemas.plan import PlanRequest
-from app.services.knowledge import crawler_service, vector_store, CrawlRequest
+﻿from app.schemas.plan import PlanRequest
+from tools.reviews_tools import fetch_tavily_reviews_sync
 
 
-@dataclass
 class ReviewRAGAgent:
+    """景点评价 RAG Agent。
+
+    改用 Tavily 网页搜索获取互联网公开的评价/攻略材料（不再使用 Bing 自研爬虫），
+    返回 [{poi_name, city, title, url, content, source}] 供行程计划页展示。
+    调用失败 / 无结果时返回空列表，由上层如实告知，绝不编造。
+    """
+
     def run(self, payload: PlanRequest) -> list[dict]:
         results = []
         for poi_name in payload.destinations[:3]:
-            if crawler_service.need_refresh(poi_name):
-                reviews = crawler_service.crawl_reviews(CrawlRequest(poi_name=poi_name, city=payload.city, category='poi'))
-                vector_store.upsert_reviews(reviews)
-            results.extend(vector_store.search_reviews(poi_name))
+            results.extend(
+                fetch_tavily_reviews_sync(poi_name, city=payload.city or "")
+            )
         return results

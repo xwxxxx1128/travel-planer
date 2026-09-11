@@ -17,6 +17,7 @@ class RuntimeConfig:
     openai_base_url: str = ''
     amap_web_key: str = ''
     amap_js_key: str = ''
+    tavily_api_key: str = ''
 
     def to_env_dict(self) -> dict[str, str]:
         return {
@@ -25,6 +26,7 @@ class RuntimeConfig:
             'AMAP_WEB_API_KEY': self.amap_web_key,
             'AMAP_JS_API_KEY': self.amap_js_key,
             'VITE_AMAP_JS_API_KEY': self.amap_js_key,
+            'TAVILY_API_KEY': self.tavily_api_key,
         }
 
 
@@ -39,6 +41,7 @@ def _current_config() -> RuntimeConfig:
         openai_base_url=os.getenv('OPENAI_BASE_URL', ''),
         amap_web_key=os.getenv('AMAP_WEB_API_KEY', ''),
         amap_js_key=os.getenv('AMAP_JS_API_KEY', '') or os.getenv('VITE_AMAP_JS_API_KEY', ''),
+        tavily_api_key=os.getenv('TAVILY_API_KEY', ''),
     )
 
 
@@ -55,6 +58,7 @@ def save_runtime_config(updates: Mapping[str, str | None]) -> RuntimeConfig:
         'openai_base_url': 'OPENAI_BASE_URL',
         'amap_web_key': 'AMAP_WEB_API_KEY',
         'amap_js_key': 'AMAP_JS_API_KEY',
+        'tavily_api_key': 'TAVILY_API_KEY',
     }
 
     for field_name, raw_value in updates.items():
