@@ -13,7 +13,10 @@ class Settings(BaseSettings):
 
     APP_NAME: str = '聚焦智能多景点旅行规划Agent系统'
     SECRET_KEY: str = Field(default='change-me')
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
+    # 访问令牌有效期：默认 2 小时（原为 7 天，配合 refresh 机制大幅缩短，降低令牌泄露影响面）
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
+    # 刷新令牌有效期：默认 7 天，仅用于静默续期访问令牌
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
 
     DATABASE_URL: str = Field(default=f'sqlite:///{BASE_DIR / "system.db"}')
     CHROMA_PERSIST_DIR: str = Field(default=str(BASE_DIR / 'chroma_db'))

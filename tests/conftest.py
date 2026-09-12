@@ -7,6 +7,19 @@ from main import Server
 from db import DBModelBase
 
 
+@pytest.fixture(autouse=True)
+def _reset_review_cache():
+    """每个用例前清空评价缓存表：pytest 下 sqlite 为共享 in-memory，避免缓存跨用例串数据。"""
+    from app.db.session import SessionLocal, init_db
+    from app.models.review import Review
+
+    init_db()
+    with SessionLocal() as session:
+        session.query(Review).delete()
+        session.commit()
+    yield
+
+
 @pytest.fixture
 def test_db():
     """创建测试数据库"""

@@ -13,6 +13,8 @@ from starlette import status
 
 from config import settings
 
+from app.core.config import settings as app_settings
+
 log = logging.getLogger('emp')
 
 
@@ -40,7 +42,7 @@ async def verify_token(request: Request, call_next: Callable) -> Response:
         token: str = authorization.split(' ')[1]
         try:
             # 校验token
-            res_dict = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.ALGORITHM])
+            res_dict = jwt.decode(token, app_settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
             username = res_dict.get('sub').split(':')[1]
 
             # 判断是否超时

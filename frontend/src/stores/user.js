@@ -3,20 +3,31 @@ import { computed, ref } from 'vue'
 
 export const useUserStore = defineStore('user', () => {
   const token = ref(localStorage.getItem('token') || '')
+  const refreshToken = ref(localStorage.getItem('refreshToken') || '')
   const userInfo = ref(JSON.parse(localStorage.getItem('userInfo') || 'null'))
   const isLoggedIn = computed(() => !!token.value)
 
-  const login = (tokenValue, userValue) => {
-    token.value = tokenValue
+  const setTokens = (tokenValue, refreshValue) => {
+    token.value = tokenValue || ''
+    if (tokenValue) localStorage.setItem('token', tokenValue)
+    else localStorage.removeItem('token')
+
+    refreshToken.value = refreshValue || ''
+    if (refreshValue) localStorage.setItem('refreshToken', refreshValue)
+    else localStorage.removeItem('refreshToken')
+  }
+
+  const login = (tokenValue, refreshValue, userValue) => {
+    setTokens(tokenValue, refreshValue)
     userInfo.value = userValue
-    localStorage.setItem('token', tokenValue)
     localStorage.setItem('userInfo', JSON.stringify(userValue))
   }
+
   const logout = () => {
-    token.value = ''
+    setTokens('', '')
     userInfo.value = null
-    localStorage.removeItem('token')
     localStorage.removeItem('userInfo')
   }
-  return { token, userInfo, isLoggedIn, login, logout }
+
+  return { token, refreshToken, userInfo, isLoggedIn, login, logout, setTokens }
 })

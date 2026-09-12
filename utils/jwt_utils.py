@@ -4,15 +4,13 @@ from typing import Union, Any
 from jose import jwt
 
 from config import settings
+from app.core.config import settings as app_settings
 
-# 用于访问的：JWT令牌的有效时间
-ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES  # 30 minutes
-#  JWT令牌的有效时间: 较长
-# REFRESH_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
-# 加密算法
+# 统一密钥来源：与 app.core.config 的 SECRET_KEY 保持一致，
+# 不再使用 config/development.yml 的 JWT_SECRET_KEY（已废弃，避免两套密钥不一致）。
+ACCESS_TOKEN_EXPIRE_MINUTES = app_settings.ACCESS_TOKEN_EXPIRE_MINUTES
 ALGORITHM = settings.ALGORITHM
-# 密钥
-JWT_SECRET_KEY = settings.JWT_SECRET_KEY
+JWT_SECRET_KEY = app_settings.SECRET_KEY
 
 
 def create_token(subject: Union[str, Any], expires_delta: int = None) -> str:

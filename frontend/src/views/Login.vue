@@ -57,7 +57,7 @@ const submit = async () => {
   loading.value = true
   try {
     const res = await authApi.login(form)
-    store.login(res.access_token, res.user)
+    store.login(res.access_token, res.refresh_token, res.user)
     router.push('/route-planner')
   } finally {
     loading.value = false
