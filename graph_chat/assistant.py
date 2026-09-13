@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 
-from langchain_core.messages import AIMessage, trim_messages
+from langchain_core.messages import AIMessage, HumanMessage, trim_messages
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
@@ -21,6 +21,9 @@ from tools.route_planner import plan_route, get_route_distance
 from tools.reviews_tools import search_reviews
 
 
+import logging
+logger = logging.getLogger(__name__)
+
 def _count_tokens(messages) -> int:
     """粗略按字符数/4 估算 token，避免依赖具体模型的 tokenizer（网关模型常无对应 tokenizer）。"""
     total = 0
@@ -28,6 +31,54 @@ def _count_tokens(messages) -> int:
         content = getattr(m, "content", "")
         total += len(content) if isinstance(content, str) else len(str(content))
     return total // 4
+
+
+# --------------------------------------------------------------------------- #
+# 方案4：评价类提问的“后置校验”辅助
+# 说明：主助手是否调用 search_reviews 由模型自主决定，存在“凭自身知识编造评价 +
+# 伪造来源链接”的风险。这里在节点内做兜底校验：评价类提问若既没检索、也没拿到
+# 系统预取的材料，却直接作答，则补一次“强制检索”提示后重试。
+# 注意：_REVIEW_CTX_MARK 必须与 app/services/review_intent.MARK_PREFIX 保持一致。
+# --------------------------------------------------------------------------- #
+_REVIEW_CTX_MARK = "【评价检索"
+_REVIEW_HINT_WORDS = (
+    "评价", "点评", "口碑", "游记", "好评", "差评", "游客", "游人",
+    "值得去", "好玩吗", "推荐吗",
+)
+_REVIEW_GENERIC_BLOCK = (
+    "天气", "路线", "酒店", "机票", "航班", "门票", "交通", "美食", "餐厅",
+    "住宿", "价格", "费用", "规划", "行程",
+)
+
+
+def _is_review_query(messages) -> bool:
+    """最后一条用户消息是否为“景点评价类”提问（排除天气/酒店等通用主题）。"""
+    for m in reversed(messages or []):
+        if isinstance(m, HumanMessage):
+            content = m.content
+            text = content if isinstance(content, str) else str(content)
+            if any(b in text for b in _REVIEW_GENERIC_BLOCK):
+                return False
+            return any(w in text for w in _REVIEW_HINT_WORDS)
+    return False
+
+
+def _called_search_reviews(messages) -> bool:
+    """本轮对话中是否调用过 search_reviews。"""
+    for m in messages or []:
+        for tc in (getattr(m, "tool_calls", []) or []):
+            if tc.get("name") == "search_reviews":
+                return True
+    return False
+
+
+def _has_prefetched_review_ctx(messages) -> bool:
+    """本轮是否已注入系统预取的评价上下文（材料或无材料提示）。"""
+    for m in messages or []:
+        content = getattr(m, "content", "")
+        if isinstance(content, str) and _REVIEW_CTX_MARK in content:
+            return True
+    return False
 
 
 # 历史裁剪器：只把最近约 4000 token 的对话喂给大模型。
@@ -65,6 +116,7 @@ class CtripAssistant:
         # 裁剪历史后 1 次重试已足够兜底，可显著压低最坏情况耗时。
         max_retries = 1
         retries = 0
+        review_nudged = False  # 方案4：本轮是否已触发过“强制检索”提示
         while True:
             # 关键优化：仅用“裁剪后的最近对话”喂给大模型，避免 messages 用 add_messages
             # 无限累积导致轮次越多每次调用越慢（对标 trip_assistant 的 history[-6:] 思路）。
@@ -72,6 +124,36 @@ class CtripAssistant:
             trimmed = _MESSAGE_TRIMMER.invoke(state.get("messages") or [])
             local_state = {**state, "messages": trimmed}
             result = self.runnable.invoke(local_state)
+
+            logger.info(
+                "primary_assistant 模型返回 tool_calls=%s content_head=%s",
+                [tc.get("name") for tc in (result.tool_calls or [])],
+                (str(result.content)[:120] if result.content else ""),
+            )
+
+            # 方案4：评价类提问的后置校验。若本轮是评价类提问、模型既未调用 search_reviews、
+            # 也没有系统预取的评价材料，却直接给出了文字回答，则补一次“强制检索”提示后重试，
+            # 避免“凭自身知识编造评价 + 伪造来源链接”。
+            if (
+                not review_nudged
+                and not result.tool_calls
+                and result.content
+                and _is_review_query(state.get("messages") or [])
+                and not _called_search_reviews(state.get("messages") or [])
+                and not _has_prefetched_review_ctx(state.get("messages") or [])
+            ):
+                review_nudged = True
+                logger.info("评价类提问未检索即作答，触发一次强制检索提示")
+                messages = state["messages"] + [
+                    (
+                        "user",
+                        "请先调用 search_reviews 工具获取该景点的联网评价材料，再基于材料作答；"
+                        "若确实无法获取，请如实说明。严禁凭自身知识编造评价或来源链接。",
+                    )
+                ]
+                state = {**state, "messages": _MESSAGE_TRIMMER.invoke(messages)}
+                continue
+
             # 如果，runnable执行完后，没有得到一个实际的输出
             if not result.tool_calls and (  # 如果结果中没有工具调用，并且内容为空或内容列表的第一个元素没有"text"，则需要重新提示用户输入。
                     not result.content
@@ -99,6 +181,15 @@ primary_assistant_prompt = ChatPromptTemplate.from_messages(
             "system",
             "您是出行规划智能助手。"
             "您的主要职责是帮助用户规划旅行路线和回答旅行相关的查询。"
+            ""
+            "### 评价类问题的强制规则（最高优先级）"
+            "当用户询问任何景点/地点的评价、口碑、点评、游客感受、是否值得去时："
+            " - 若上下文中已包含系统预取的评价材料（以「【评价检索材料·预取】」开头），"
+            "   请直接基于该材料聚合作答，不要再重复调用工具；"
+            " - 若上下文标记为「【评价检索结果·无材料】」，说明系统已尝试检索但未获取到材料，"
+            "   请如实告知用户当前无法提供该景点评价，不要编造；"
+            " - 若上述上下文均不存在，你必须先调用 search_reviews 获取材料后再作答；"
+            " - 严禁在没有任何检索材料的情况下，凭自身知识编造评价内容或来源链接。"
             ""
             "## 指令"
             ""

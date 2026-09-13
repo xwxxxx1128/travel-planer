@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from langchain_core.tools import tool
 
 from tools.mcp_tavily_client import TavilyMcpClient
+from tools.poi_normalize import cache_key
 
 logger = logging.getLogger(__name__)
 # 单次检索返回条数（可通过环境变量调整）
@@ -36,8 +37,12 @@ _REVIEW_CACHE_TTL_DAYS = int(os.getenv("REVIEW_CACHE_TTL_DAYS", "30"))
 # 评价缓存（落库）：同一地点一个月内先查库，避免重复调 Tavily。
 # 缓存读写异常时优雅降级为「直接现检索」，不影响主流程。
 # ----------------------------------------------------------------------
-def _cache_lookup(poi_name: str, city: str, time_range: str, max_results: int) -> list[dict] | None:
-    """命中且未过期则返回缓存的评价条目，否则返回 None。"""
+def _cache_lookup(poi_key: str, time_range: str, max_results: int) -> list[dict] | None:
+    """按归一化 key 命中且未过期则返回缓存的评价条目，否则返回 None。
+
+    poi_key 由 tools.poi_normalize.cache_key(poi_name, city) 生成，统一了
+    「小珠山 / 珠山国家森林公园」等不同叫法，保证同景点复用同一份缓存。
+    """
     try:
         from app.db.session import SessionLocal
         from app.models.review import Review
@@ -47,8 +52,7 @@ def _cache_lookup(poi_name: str, city: str, time_range: str, max_results: int) -
             rows = (
                 session.query(Review)
                 .filter(
-                    Review.poi_name == poi_name,
-                    Review.city == (city or ""),
+                    Review.poi_key == poi_key,
                     Review.time_range == time_range,
                     Review.max_results == max_results,
                     Review.expires_at > now,
@@ -68,21 +72,27 @@ def _cache_lookup(poi_name: str, city: str, time_range: str, max_results: int) -
                 }
                 for r in rows
             ]
-    except Exception as exc:  # 表未建/连接异常等
-        logger.warning("评价缓存读取失败（%s）：%s", poi_name, exc)
+    except Exception as exc:  # 表未建/连接异常等：降级为“现调 Tavily”
+        logger.warning("评价缓存读取失败（key=%s）：%s（已降级为现调 Tavily）", poi_key, exc)
         return None
 
 
-def _cache_store(poi_name: str, city: str, time_range: str, max_results: int, items: list[dict]) -> None:
-    """写入本次检索结果，并清理同 key 的旧缓存（含已过期）。"""
+def _cache_store(
+    poi_key: str,
+    poi_name: str,
+    city: str,
+    time_range: str,
+    max_results: int,
+    items: list[dict],
+) -> None:
+    """写入本次检索结果（含归一化 key），并清理同 key 的旧缓存（含已过期）。"""
     try:
         from app.db.session import SessionLocal
         from app.models.review import Review
 
         with SessionLocal() as session:
             session.query(Review).filter(
-                Review.poi_name == poi_name,
-                Review.city == (city or ""),
+                Review.poi_key == poi_key,
                 Review.time_range == time_range,
                 Review.max_results == max_results,
             ).delete()
@@ -91,6 +101,7 @@ def _cache_store(poi_name: str, city: str, time_range: str, max_results: int, it
             for it in items:
                 session.add(
                     Review(
+                        poi_key=poi_key,
                         poi_name=poi_name,
                         city=city or "",
                         title=it.get("title", ""),
@@ -106,7 +117,7 @@ def _cache_store(poi_name: str, city: str, time_range: str, max_results: int, it
                 )
             session.commit()
     except Exception as exc:  # 表未建/连接异常等：仅记日志，不阻断主流程
-        logger.warning("评价缓存写入失败（%s）：%s", poi_name, exc)
+        logger.warning("评价缓存写入失败（key=%s）：%s（本次结果未落库）", poi_key, exc)
 
 
 # 在任何调用上下文（同步路由 / 异步事件循环内）都能安全跑异步 Tavily 客户端：
@@ -131,15 +142,17 @@ async def fetch_tavily_reviews(
     """
     resolved_max = max_results or _TAVILY_MAX_RESULTS
     resolved_tr = time_range or _TAVILY_REVIEW_TIME_RANGE
+    # 归一化缓存 key（城市::规范景点名）：使同景点不同叫法命中同一份缓存
+    poi_key = cache_key(poi_name, city)
     logger.info(
         "fetch_tavily_reviews 被调用 poi=%s city=%s force_refresh=%s "
-        "time_range=%s max_results=%s",
-        poi_name, city or "-", force_refresh, resolved_tr, resolved_max,
+        "time_range=%s max_results=%s poi_key=%s",
+        poi_name, city or "-", force_refresh, resolved_tr, resolved_max, poi_key,
     )
 
     # 缓存优先：同地点一个月内直接返回库内结果
     if not force_refresh:
-        cached = _cache_lookup(poi_name, city, resolved_tr, resolved_max)
+        cached = _cache_lookup(poi_key, resolved_tr, resolved_max)
         if cached is not None:
             logger.info("评价命中本地缓存（%s / %s）条数=%d", poi_name, city or "-", len(cached))
             return cached
@@ -159,7 +172,7 @@ async def fetch_tavily_reviews(
 
     # 命中结果落库缓存，供一个月内复用
     if items:
-        _cache_store(poi_name, city, resolved_tr, resolved_max, items)
+        _cache_store(poi_key, poi_name, city, resolved_tr, resolved_max, items)
         logger.info("Tavily 返回 %d 条并写入缓存（%s / %s）", len(items), poi_name, city or "-")
     else:
         logger.info("Tavily 未返回任何结果（%s / %s）", poi_name, city or "-")

@@ -57,7 +57,9 @@ class VectorengineChatOpenAI(ChatOpenAI):
 
 
 llm = VectorengineChatOpenAI(  # 使用 DeepSeek 大模型（SiliconFlow 网关）
-    temperature=0.3,
+    # 方案2：降温以提升 tool-calling 的指令遵循度与答案稳定性，减少“自由发挥/编造”。
+    # 默认 0.2，可通过环境变量 OPENAI_TEMPERATURE 调整。
+    temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.2")),
     model=os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3"),
     openai_api_key=os.getenv("OPENAI_API_KEY"),
     openai_api_base=os.getenv("OPENAI_BASE_URL"),

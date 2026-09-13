@@ -32,6 +32,11 @@ from langgraph.graph import StateGraph
 from langgraph.prebuilt import tools_condition
 
 from app.core.config import BASE_DIR
+from app.services.review_intent import (
+    build_material_context,
+    detect_review_intent,
+    no_material_context,
+)
 from graph_chat.assistant import (
     CtripAssistant,
     assistant_runnable,
@@ -66,6 +71,9 @@ _REQUEST_BUDGET = 60
 # 配合 token 级流式（首字 ~2s 出现）与 recursion_limit=15，正常请求远不会触及该上限；
 # 这里仅作为「真正卡死」时的兜底熔断，避免像原 480s 那样让用户空等 8 分钟。
 _STREAM_BUDGET = 240
+# 评价“确定性预检索”（方案3）的单次时长上限（秒）：命中评价意图时会在进图前先调
+# fetch_tavily_reviews（内部先查库、未命中再联网），避免其慢/挂起拖垮整轮对话。
+_REVIEW_PREFETCH_TIMEOUT = 25
 APPROVAL_PROMPT = (
     "AI助手马上根据你要求，执行相关操作。"
     "您是否批准上述操作？输入'y'继续；否则，请说明您请求的更改。"
@@ -341,6 +349,31 @@ async def stream_chat_events(req: Dict[str, Any]):
     if message:
         await asyncio.to_thread(_append_message, session_id, {"role": "user", "text": message})
     config = _make_config(session_id, req.get("passenger_id"))
+
+    # ---- 方案3：评价意图 → 确定性预检索（不依赖模型“自觉”调用工具） ----
+    # 命中评价意图时直接调 fetch_tavily_reviews（内部先查库、未命中再 Tavily、随后落库），
+    # 把材料作为上下文注入；确保“提问评价 → 必然经过数据库/Tavily”，而非模型凭记忆编造。
+    prefetch_ctx: Optional[str] = None
+    prefetch_reviews: List[Dict[str, Any]] = []
+    review_intent = detect_review_intent(message) if message else None
+    if review_intent:
+        poi, city = review_intent
+        logger.info("检测到评价意图 poi=%s city=%s，执行确定性预检索", poi, city or "-")
+        yield _sse_payload({"type": "status", "text": f"正在检索「{poi}」相关评价…"})
+        try:
+            prefetch_ctx, prefetch_reviews = await asyncio.wait_for(
+                asyncio.to_thread(build_material_context, poi, city),
+                timeout=_REVIEW_PREFETCH_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("评价预检索超时（%s）", poi)
+            prefetch_ctx = no_material_context(poi)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("评价预检索异常（%s）：%s", poi, exc)
+            prefetch_ctx = no_material_context(poi)
+    # 预取材料与用户问题分两条消息注入：先材料、后问题（材料缺失时注入“无材料”提示）
+    input_messages = ([("user", prefetch_ctx)] if prefetch_ctx else []) + [("user", message)]
+
     loop = asyncio.get_running_loop()
     queue: "asyncio.Queue" = asyncio.Queue()
     sentinel = object()
@@ -366,7 +399,7 @@ async def stream_chat_events(req: Dict[str, Any]):
             #   对照 trip_assistant 纯 Python 版“单次 LLM 即返回”的体验：流式把整段等待
             #   摊薄成“逐字出现”，是消除“一直显示主助手在思考”最直接的改造。
             for event in graph.stream(
-                {"messages": ("user", message)}, config,
+                {"messages": input_messages}, config,
                 stream_mode=["updates", "messages"],
                 recursion_limit=15,
             ):
@@ -459,7 +492,7 @@ async def stream_chat_events(req: Dict[str, Any]):
             if remaining <= 0:
                 # 总预算耗尽：即便超时也先把已算出的答案落盘，刷新页面即可恢复
                 logger.warning("stream_chat 总预算耗尽（session=%s）", session_id)
-                await _persist_stream_result(session_id, req, config, last_reply, _pending(config))
+                await _persist_stream_result(session_id, req, config, last_reply, _pending(config), prefetch_reviews)
                 yield _sse_payload({"type": "error", "text": "本次请求处理超时（总时长上限）。请稍后重试，或换一个更简短的问题。"})
                 return
             try:
@@ -467,7 +500,7 @@ async def stream_chat_events(req: Dict[str, Any]):
             except asyncio.TimeoutError:
                 # 两次产出间隔超预算仍无字节 → 超时时同样落盘已有答案，结束流
                 logger.warning("stream_chat 产出间隔超时（session=%s）", session_id)
-                await _persist_stream_result(session_id, req, config, last_reply, _pending(config))
+                await _persist_stream_result(session_id, req, config, last_reply, _pending(config), prefetch_reviews)
                 yield _sse_payload({"type": "error", "text": "模型响应较慢，本次请求已超时。请稍后重试，或换一个更简短的问题。"})
                 return
             if item is sentinel:
@@ -499,10 +532,11 @@ async def stream_chat_events(req: Dict[str, Any]):
                 "intent": _current_intent(config) or "general",
                 "confirm": _pending_confirm(config) if pending else None,
                 "escalated": pending,
+                "reviews": prefetch_reviews,
             }
         )
         # 持久化本轮对话（用户提问 + 助手回复），刷新页面后可恢复
-        await _persist_stream_result(session_id, req, config, resp["reply"], pending)
+        await _persist_stream_result(session_id, req, config, resp["reply"], pending, prefetch_reviews)
         yield _sse_payload({"type": "final", **resp})
     finally:
         # 停止心跳并清理 worker 线程；最多等 5s，避免流已结束时被卡住的 worker 拖住事件循环
@@ -684,10 +718,16 @@ def _append_message(session_id: str, message: Dict[str, Any]) -> None:
         tmp.replace(path)
 
 
-def _upsert_assistant(session_id: str, assistant_text: str, confirm=None) -> None:
+def _upsert_assistant(
+    session_id: str,
+    assistant_text: str,
+    confirm=None,
+    reviews: Optional[List[Dict[str, Any]]] = None,
+) -> None:
     """把本轮助手回复写入历史：若末条已是助手消息则覆盖其文本，否则追加。
 
     用于流式过程中的增量落盘，保证任意时刻刷新都能恢复已产生的内容。
+    reviews：本轮确定性预检索（方案3）得到的结构化评价条目，供前端直接展示。
     """
     if not assistant_text:
         return
@@ -697,7 +737,7 @@ def _upsert_assistant(session_id: str, assistant_text: str, confirm=None) -> Non
         entry = {
             "role": "assistant",
             "text": assistant_text,
-            "reviews": [],
+            "reviews": reviews or [],
             "flights": [],
             "hotels": [],
             "confirm": confirm,
@@ -713,7 +753,12 @@ def _upsert_assistant(session_id: str, assistant_text: str, confirm=None) -> Non
 
 
 async def _persist_stream_result(
-    session_id: str, req: Dict[str, Any], config, reply: str, pending: bool
+    session_id: str,
+    req: Dict[str, Any],
+    config,
+    reply: str,
+    pending: bool,
+    reviews: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """把本轮助手回复落盘到 chat_history。用户提问已在流式开始时落盘，这里只写/更新助手回复。
 
@@ -724,7 +769,7 @@ async def _persist_stream_result(
     text = (reply or "").strip() or (APPROVAL_PROMPT if pending else "")
     if not text:
         return
-    await asyncio.to_thread(_upsert_assistant, session_id, text, confirm)
+    await asyncio.to_thread(_upsert_assistant, session_id, text, confirm, reviews)
 
 
 # --------------------------------------------------------------------------- #
@@ -746,11 +791,32 @@ async def handle_chat(req: Dict[str, Any]) -> Dict[str, Any]:
         return resp
 
     config = _make_config(session_id, req.get("passenger_id"))
+
+    # ---- 方案3：评价意图 → 确定性预检索（详见 stream_chat_events 同名逻辑） ----
+    prefetch_ctx: Optional[str] = None
+    prefetch_reviews: List[Dict[str, Any]] = []
+    review_intent = detect_review_intent(message)
+    if review_intent:
+        poi, city = review_intent
+        logger.info("检测到评价意图 poi=%s city=%s，执行确定性预检索", poi, city or "-")
+        try:
+            prefetch_ctx, prefetch_reviews = await asyncio.wait_for(
+                asyncio.to_thread(build_material_context, poi, city),
+                timeout=_REVIEW_PREFETCH_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("评价预检索超时（%s）", poi)
+            prefetch_ctx = no_material_context(poi)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("评价预检索异常（%s）：%s", poi, exc)
+            prefetch_ctx = no_material_context(poi)
+    input_messages = ([("user", prefetch_ctx)] if prefetch_ctx else []) + [("user", message)]
+
     try:
         # 同步图放到线程里执行，并用 wait_for 兜底总时长，避免模型慢/限流时请求无限挂起、
         # 前端在 120s 处主动断开而显示硬性的“请求超时”。
         reply = await asyncio.wait_for(
-            asyncio.to_thread(_run_graph, {"messages": ("user", message)}, config),
+            asyncio.to_thread(_run_graph, {"messages": input_messages}, config),
             timeout=_REQUEST_BUDGET,
         )
     except asyncio.TimeoutError:
@@ -777,6 +843,7 @@ async def handle_chat(req: Dict[str, Any]) -> Dict[str, Any]:
             "intent": _current_intent(config) or "general",
             "confirm": _pending_confirm(config) if pending else None,
             "escalated": pending,
+            "reviews": prefetch_reviews,
         }
     )
     # 持久化本轮对话（用户提问 + 助手回复），保证刷新页面后可恢复

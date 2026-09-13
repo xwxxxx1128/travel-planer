@@ -20,6 +20,9 @@ class Review(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     # ---- 评价缓存扩展：Tavily 联网检索结果的本地缓存 ----
     # 命中后一个月内（REVIEW_CACHE_TTL_DAYS）再问同一地点，优先从本表返回，避免重复调 Tavily。
+    # poi_key：景点名归一化后的缓存 key（城市::规范景点名，见 tools/poi_normalize.py），
+    #          使「小珠山 / 珠山国家森林公园」等不同叫法命中同一份缓存。
+    poi_key: Mapped[str | None] = mapped_column(String(256), index=True, nullable=True)
     title: Mapped[str | None] = mapped_column(String(256), nullable=True)
     url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     time_range: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)

@@ -48,7 +48,7 @@
           </el-menu-item>
           <el-menu-item index="4" @click="askReview">
             <el-icon><Star /></el-icon>
-            <span>景点评价</span>
+            <span>景点攻略评价</span>
           </el-menu-item>
         </el-menu>
       </div>
@@ -71,7 +71,7 @@
                   <span></span><span></span><span></span>
                 </div>
                 <template v-else>
-                  <p class="message-paragraph">{{ message.text }}</p>
+                  <p class="message-paragraph">{{ cleanDisplayText(message.text) }}</p>
                   <div v-if="message.reviews && message.reviews.length" class="review-list">
                     <div v-for="(rv, i) in message.reviews" :key="i" class="review-card">
                       <div class="review-head">
@@ -79,7 +79,7 @@
                         <el-tag v-if="rv.label" size="small" type="warning" effect="light">{{ rv.label }}</el-tag>
                         <span class="review-source">{{ rv.source === 'sample' ? '离线样例' : '实时爬取' }}</span>
                       </div>
-                      <div class="review-content">{{ rv.content }}</div>
+                      <div class="review-content">{{ cleanDisplayText(rv.content) }}</div>
                     </div>
                   </div>
                   <div v-if="message.flights && message.flights.length" class="flight-list">
@@ -152,7 +152,7 @@ const userStore = useUserStore()
 
 const input = ref('')
 const loading = ref(false)
-const messages = ref([{ role: 'assistant', text: '您好！我是AI智能助手。您可以：\n• 查询航班（如：从北京到上海的航班）\n• 搜索酒店（数据来自高德地图实时POI）\n• 让我推荐景点（如：我想到成都去玩，推荐一下景点）\n• 查询景点评价（如：故宫的评价）\n请问有什么可以帮您的？' }])
+const messages = ref([{ role: 'assistant', text: '您好！我是AI智能助手。您可以：\n• 查询航班（如：从北京到上海的航班）\n• 搜索酒店（数据来自高德地图实时POI）\n• 让我推荐景点（如：我想到成都去玩，推荐一下景点）\n• 查询景点攻略评价（如：故宫的评价）\n请问有什么可以帮您的？' }])
 const activeMenu = ref('1')
 const messagesContainer = ref(null)
 
@@ -212,7 +212,7 @@ const ask = async () => {
 
 const askReview = async () => {
   try {
-    const { value } = await ElMessageBox.prompt('请输入要查询评价的景点名称', '景点评价', {
+    const { value } = await ElMessageBox.prompt('请输入要查询攻略评价的景点名称', '景点攻略评价', {
       confirmButtonText: '查询',
       cancelButtonText: '取消',
       inputPattern: /\S+/,
@@ -415,6 +415,16 @@ const scrollToBottom = () => {
       messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
     }
   })
+}
+
+// 清洗展示文本：去掉 Tavily 等搜索引擎返回的 "ID: xxx" 元数据行，
+// 避免把内部检索 id 暴露到前端聊天界面。
+const cleanDisplayText = (text) => {
+  if (!text || typeof text !== 'string') return text || ''
+  return text
+    .split(/\r?\n/)
+    .filter((line) => !/^ID:\s*/i.test(line.trim()))
+    .join('\n')
 }
 
 const handleCommand = async (command) => {
