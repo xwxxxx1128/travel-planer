@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
-import os
 import sqlite3
 import threading
 import time
@@ -33,7 +32,11 @@ from langgraph.graph import StateGraph
 from langgraph.prebuilt import tools_condition
 
 from app.core.config import BASE_DIR
-from graph_chat.assistant import CtripAssistant, assistant_runnable, primary_assistant_tools
+from graph_chat.assistant import (
+    CtripAssistant,
+    assistant_runnable,
+    primary_assistant_tools,
+)
 from graph_chat.base_data_model import (
     ToBookExcursion,
     ToFlightBookingAssistant,

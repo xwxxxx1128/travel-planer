@@ -131,13 +131,19 @@ async def fetch_tavily_reviews(
     """
     resolved_max = max_results or _TAVILY_MAX_RESULTS
     resolved_tr = time_range or _TAVILY_REVIEW_TIME_RANGE
+    logger.info(
+        "fetch_tavily_reviews 被调用 poi=%s city=%s force_refresh=%s "
+        "time_range=%s max_results=%s",
+        poi_name, city or "-", force_refresh, resolved_tr, resolved_max,
+    )
 
     # 缓存优先：同地点一个月内直接返回库内结果
     if not force_refresh:
         cached = _cache_lookup(poi_name, city, resolved_tr, resolved_max)
         if cached is not None:
-            logger.info("评价命中本地缓存（%s / %s）", poi_name, city or "-")
+            logger.info("评价命中本地缓存（%s / %s）条数=%d", poi_name, city or "-", len(cached))
             return cached
+        logger.info("评价未命中本地缓存，准备现调 Tavily（%s / %s）", poi_name, city or "-")
 
     query = f"{poi_name} 游客真实评价 游玩攻略 游记 推荐"
     try:
@@ -154,6 +160,9 @@ async def fetch_tavily_reviews(
     # 命中结果落库缓存，供一个月内复用
     if items:
         _cache_store(poi_name, city, resolved_tr, resolved_max, items)
+        logger.info("Tavily 返回 %d 条并写入缓存（%s / %s）", len(items), poi_name, city or "-")
+    else:
+        logger.info("Tavily 未返回任何结果（%s / %s）", poi_name, city or "-")
 
     return [
         {
@@ -189,6 +198,7 @@ async def search_reviews(poi_name: str) -> str:
     （含标题、摘要与来源链接）。请基于返回的材料聚合提炼游客真实评价，
     并附上原始来源链接；严禁编造内容。材料有限时如实说明，未命中时如实告知。
     """
+    logger.info("search_reviews 被调用 poi_name=%s", poi_name)
     items = await fetch_tavily_reviews(poi_name)
     if not items:
         return f"未检索到「{poi_name}」的相关网络评价材料，暂无法提供游客评价。"

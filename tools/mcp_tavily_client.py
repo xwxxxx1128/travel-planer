@@ -24,14 +24,22 @@ import os
 from contextlib import AsyncExitStack
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-# 默认走 Python 版 Tavily MCP Server（方法2）：已在 Docker 镜像构建期预装，
-# 运行时直接执行镜像内的 tavily-mcp 二进制（无联网下载、无 Node 依赖）。
-# 如需切换形态，可覆盖环境变量：
-#   TAVILY_MCP_COMMAND=uvx tavily-mcp  # uvx 运行时拉取（需镜像装 uv）
-#   TAVILY_MCP_COMMAND=npx -y tavily-mcp  # Node 官方版（需镜像装 Node）
+# 显式把项目根 .env 加载进进程环境变量：本模块用 os.getenv 读取 TAVILY_API_KEY /
+# TAVILY_MCP_COMMAND，而 pydantic-settings 只把 .env 读进 settings 对象、不会写回
+# os.environ。主动 load_dotenv() 后，无论本模块被谁导入、是否裸跑，都能读到 .env，
+# 不再依赖"别的模块恰好调过 load_dotenv"这一隐式副作用。
+load_dotenv()
+
+# 默认命令 `tavily-mcp` 指 PATH 上的可执行文件：Docker 镜像已在构建期预装，
+# 运行时直接执行镜像内二进制（无联网下载、不依赖 Node）。
+# 本地开发环境通常未安装该命令，拉起子进程会报 [WinError 2] 系统找不到指定的文件；
+# 此时用 TAVILY_MCP_COMMAND 覆盖为隔离形态（避免把 mcp 升级到 2.x 污染项目 venv）：
+#   TAVILY_MCP_COMMAND=uvx tavily-mcp     # uvx 在临时隔离环境运行（需 uv）
+#   TAVILY_MCP_COMMAND=npx -y tavily-mcp  # Node 官方版（需 Node）
 _DEFAULT_MCP_COMMAND = os.getenv("TAVILY_MCP_COMMAND", "tavily-mcp")
 
 

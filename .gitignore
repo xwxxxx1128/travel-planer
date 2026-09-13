@@ -62,6 +62,11 @@ chroma_db/
 vector_store/
 pg_data/
 
+# ========== 运行时生成数据（对话检查点/历史，非源码，不入库） ==========
+data/
+chat_sessions/
+crawl_cache/
+
 # ========== Docker 相关 ==========
 .dockerignore
 
