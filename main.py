@@ -47,7 +47,7 @@ def main() -> None:
 
     threading.Thread(target=_open_browser, daemon=True).start()
     print(f'[info] Open in browser: {browser_url}')
-    uvicorn.run(app, host='0.0.0.0', port=8000)
+    uvicorn.run(app, host='0.0.0.0', port=8000, reload=True)
 
 
 class Server:
