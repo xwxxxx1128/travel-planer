@@ -26,15 +26,23 @@ def mask_secret(value: str) -> str:
 class RuntimeConfigResponse(BaseModel):
     openai_api_key: str = ''
     openai_base_url: str = ''
+    openai_model: str = ''
+    openai_temperature: str = ''
     amap_web_key: str = ''
     amap_js_key: str = ''
+    tavily_api_key: str = ''
+    tavily_mcp_command: str = 'tavily-mcp'
 
 
 class RuntimeConfigUpdate(BaseModel):
     openai_api_key: str = Field(default='')
     openai_base_url: str = Field(default='')
+    openai_model: str = Field(default='')
+    openai_temperature: str = Field(default='')
     amap_web_key: str = Field(default='')
     amap_js_key: str = Field(default='')
+    tavily_api_key: str = Field(default='')
+    tavily_mcp_command: str = Field(default='tavily-mcp')
 
 
 @router.get('/runtime', response_model=RuntimeConfigResponse)

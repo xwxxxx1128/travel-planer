@@ -6,7 +6,9 @@ import json
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
-# 加载 .env 文件中的环境变量
+from app.core.runtime_config import get_runtime_config
+
+# 加载 .env 文件中的环境变量（作为兜底默认值）
 load_dotenv()
 
 
@@ -56,13 +58,21 @@ class VectorengineChatOpenAI(ChatOpenAI):
 # )
 
 
-llm = VectorengineChatOpenAI(  # 使用 DeepSeek 大模型（SiliconFlow 网关）
+def _resolve_llm_config() -> dict:
+    """优先取前端保存的运行时配置，未设置则回退到环境变量 / 默认值。"""
+    runtime = get_runtime_config()
+    return {
+        "temperature": float(runtime.openai_temperature or os.getenv("OPENAI_TEMPERATURE", "0.2")),
+        "model": runtime.openai_model or os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3"),
+        "openai_api_key": runtime.openai_api_key or os.getenv("OPENAI_API_KEY"),
+        "openai_api_base": runtime.openai_base_url or os.getenv("OPENAI_BASE_URL"),
+    }
+
+
+llm = VectorengineChatOpenAI(
     # 方案2：降温以提升 tool-calling 的指令遵循度与答案稳定性，减少“自由发挥/编造”。
-    # 默认 0.2，可通过环境变量 OPENAI_TEMPERATURE 调整。
-    temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.2")),
-    model=os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3"),
-    openai_api_key=os.getenv("OPENAI_API_KEY"),
-    openai_api_base=os.getenv("OPENAI_BASE_URL"),
+    # 默认 0.2，可通过前端设置或环境变量 OPENAI_TEMPERATURE 调整。
+    **_resolve_llm_config(),
     max_retries=1,  # 限流时快速失败，避免反复重试把额度打满、表现为"超时"
     timeout=45,  # 单次请求 45 秒超时，缩短整体耗时，避免长时间挂起导致前端超时
 )

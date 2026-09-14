@@ -40,7 +40,13 @@ load_dotenv()
 # 此时用 TAVILY_MCP_COMMAND 覆盖为隔离形态（避免把 mcp 升级到 2.x 污染项目 venv）：
 #   TAVILY_MCP_COMMAND=uvx tavily-mcp     # uvx 在临时隔离环境运行（需 uv）
 #   TAVILY_MCP_COMMAND=npx -y tavily-mcp  # Node 官方版（需 Node）
-_DEFAULT_MCP_COMMAND = os.getenv("TAVILY_MCP_COMMAND", "tavily-mcp")
+def _default_mcp_command() -> str:
+    """读取 Tavily MCP 启动命令；优先用运行时配置，便于前端设置即时生效。"""
+    try:
+        from app.core.runtime_config import get_runtime_config
+        return get_runtime_config().tavily_mcp_command or os.getenv("TAVILY_MCP_COMMAND", "tavily-mcp")
+    except Exception:
+        return os.getenv("TAVILY_MCP_COMMAND", "tavily-mcp")
 
 
 class TavilyMcpClient:
@@ -74,7 +80,7 @@ class TavilyMcpClient:
             raise RuntimeError("未配置 TAVILY_API_KEY，无法连接 Tavily MCP Server")
 
         # 解析启动命令（支持带参数的字符串，如 "npx -y tavily-mcp"）。
-        parts = _DEFAULT_MCP_COMMAND.split()
+        parts = _default_mcp_command().split()
         command, args = parts[0], parts[1:]
         params = StdioServerParameters(
             command=command,
