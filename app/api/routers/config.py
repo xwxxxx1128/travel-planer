@@ -69,10 +69,15 @@ def update_runtime_config(payload: RuntimeConfigUpdate):
     updates['amap_web_key'] = payload.amap_web_key if keep(payload.amap_web_key) else None
     updates['amap_js_key'] = payload.amap_js_key if keep(payload.amap_js_key) else None
 
+
+    updates['tavily_api_key'] = payload.tavily_api_key if keep(payload.tavily_api_key) else None
+    updates['tavily_mcp_command'] = payload.tavily_mcp_command if payload.tavily_mcp_command else None
     runtime_config = save_runtime_config(updates)
     return RuntimeConfigResponse(
         openai_api_key=mask_secret(runtime_config.openai_api_key),
         openai_base_url=runtime_config.openai_base_url,
         amap_web_key=mask_secret(runtime_config.amap_web_key),
         amap_js_key=mask_secret(runtime_config.amap_js_key),
+        tavily_api_key=mask_secret(runtime_config.tavily_api_key),
+        tavily_mcp_command=runtime_config.tavily_mcp_command,
     )
