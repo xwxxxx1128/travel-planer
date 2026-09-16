@@ -5,3 +5,4 @@ from app.models.hotel import Hotel
 from app.models.restaurant import Restaurant
 from app.models.review import Review
 from app.models.flight import FlightBooking
+from app.models.wishlist import WishlistItem

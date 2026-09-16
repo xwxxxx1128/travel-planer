@@ -47,7 +47,10 @@ def main() -> None:
 
     threading.Thread(target=_open_browser, daemon=True).start()
     print(f'[info] Open in browser: {browser_url}')
-    uvicorn.run(app, host='0.0.0.0', port=8000, reload=True)
+    # 注意：这里必须传 app 对象且不要开启 reload/workers。uvicorn 要求 reload/workers
+    # 只能配合“导入字符串”（如 'app.main:app'）使用；若传 app 对象又开 reload，uvicorn 会
+    # 打印 warning 后直接 sys.exit(1)，导致服务根本没启动（浏览器表现为 Network Error）。
+    uvicorn.run(app, host='0.0.0.0', port=8000)
 
 
 class Server:

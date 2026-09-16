@@ -7,6 +7,7 @@ const routes = [
   { path: '/register', component: () => import('@/views/Register.vue') },
   { path: '/route-planner', component: () => import('@/views/RoutePlanner.vue'), meta: { requiresAuth: true } },
   { path: '/chat', component: () => import('@/views/Chat.vue'), meta: { requiresAuth: true } },
+  { path: '/travel-list', component: () => import('@/views/TravelList.vue'), meta: { requiresAuth: true } },
   { path: '/profile', component: () => import('@/views/Profile.vue'), meta: { requiresAuth: true } },
 ]
 

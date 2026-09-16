@@ -66,4 +66,8 @@ export const travelApi = {
   resumeChat: (data) => api.post('/chat/resume', data),
   pendingChat: (session_id) => api.get('/chat/pending', { params: { session_id } }),
   getHistory: (session_id) => api.get('/chat/history/' + encodeURIComponent(session_id)),
+  // 旅行清单（按登录用户隔离）
+  wishlistList: () => api.get('/wishlist'),
+  wishlistAdd: (data) => api.post('/wishlist', data),
+  wishlistRemove: (id) => api.delete('/wishlist/' + id),
 }

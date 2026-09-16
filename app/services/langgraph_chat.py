@@ -43,14 +43,14 @@ from graph_chat.assistant import (
     primary_assistant_tools,
 )
 from graph_chat.base_data_model import (
-    ToBookExcursion,
+    ToTravelList,
     ToFlightBookingAssistant,
     ToHotelBookingAssistant,
 )
 from graph_chat.build_child_graph import (
     build_flight_graph,
-    builder_excursion_graph,
     builder_hotel_graph,
+    builder_travel_list_graph,
 )
 from graph_chat.state import State
 from tools.flights_tools import fetch_user_flight_information
@@ -81,27 +81,27 @@ APPROVAL_PROMPT = (
 
 # 真正的“写”类敏感工具集合（改签/预订/取消等会改动订单的操作）。只有在命中这些工具
 # 时，才需要用户手动批准。其余一律视为只读/安全工具，不弹审批框。
+# 注：旅行清单相关的“加入/移出清单”属于低风险操作，不进此集合，无需审批。
 _KNOWN_SENSITIVE = {
     "update_ticket_to_new_flight",
     "cancel_ticket",
     "book_hotel",
     "update_hotel",
     "cancel_hotel",
-    "book_excursion",
-    "update_excursion",
-    "cancel_excursion",
 }
 # 只读/查询类工具：绝不需要审批（例如 search_flights 仅在“搜索航班”，不应弹出确认框）。
 _READONLY_TOOLS = {
     "search_flights",
     "search_hotels",
-    "search_trip_recommendations",
     "lookup_policy",
     "fetch_user_flight_information",
     "amap_search_poi",
     "amap_search_around",
     "amap_geocode",
     "amap_get_weather",
+    "add_to_wishlist",
+    "remove_from_wishlist",
+    "list_wishlist",
 }
 
 
@@ -184,8 +184,8 @@ def _route_primary_assistant(state: dict) -> str:
             return "enter_update_flight"
         if tool_calls[0]["name"] == ToHotelBookingAssistant.__name__:
             return "enter_book_hotel"
-        if tool_calls[0]["name"] == ToBookExcursion.__name__:
-            return "enter_book_excursion"
+        if tool_calls[0]["name"] == ToTravelList.__name__:
+            return "enter_travel_list"
         return "primary_assistant_tools"
     raise ValueError("无效的路由")
 
@@ -204,7 +204,7 @@ def _build_graph():
 
     builder = build_flight_graph(builder)
     builder = builder_hotel_graph(builder)
-    builder = builder_excursion_graph(builder)
+    builder = builder_travel_list_graph(builder)
 
     builder.add_node("primary_assistant", CtripAssistant(assistant_runnable))
     builder.add_node(
@@ -218,7 +218,7 @@ def _build_graph():
         [
             "enter_update_flight",
             "enter_book_hotel",
-            "enter_book_excursion",
+            "enter_travel_list",
             "primary_assistant_tools",
             END,
         ],
@@ -231,7 +231,6 @@ def _build_graph():
         interrupt_before=[
             "update_flight_sensitive_tools",
             "book_hotel_sensitive_tools",
-            "book_excursion_sensitive_tools",
         ],
     )
 
@@ -259,13 +258,25 @@ _load_approval_ledger()
 # --------------------------------------------------------------------------- #
 # 会话辅助
 # --------------------------------------------------------------------------- #
-def _make_config(session_id: str, passenger_id: Optional[str] = None) -> Dict[str, Any]:
-    return {
-        "configurable": {
-            "thread_id": session_id,
-            "passenger_id": passenger_id or DEFAULT_PASSENGER_ID,
-        }
+def _make_config(
+    session_id: str,
+    passenger_id: Optional[str] = None,
+    user_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """构造图运行配置。
+
+    除会话/乘客外，额外注入：
+    - user_id：旅行清单按用户隔离，对话工具（add_to_wishlist 等）据此定位当前用户；
+    - session_id：供审批台账 _pending_confirm 按会话去重（刷新后不重复弹框）。
+    """
+    configurable: Dict[str, Any] = {
+        "thread_id": session_id,
+        "passenger_id": passenger_id or DEFAULT_PASSENGER_ID,
+        "session_id": session_id,
     }
+    if user_id is not None:
+        configurable["user_id"] = user_id
+    return {"configurable": configurable}
 
 
 def _run_graph(input_payload, config) -> str:
@@ -324,11 +335,11 @@ _NODE_LABELS = {
     "update_flight_sensitive_tools": "航班敏感操作",
     "book_hotel": "酒店助手处理",
     "book_hotel_sensitive_tools": "酒店敏感操作",
-    "book_excursion": "游览助手处理",
-    "book_excursion_sensitive_tools": "游览敏感操作",
+    "travel_list": "旅行清单助手处理",
+    "travel_list_tools": "操作旅行清单",
     "enter_update_flight": "进入航班流程",
     "enter_book_hotel": "进入酒店流程",
-    "enter_book_excursion": "进入游览流程",
+    "enter_travel_list": "进入旅行清单流程",
 }
 
 
@@ -348,7 +359,7 @@ async def stream_chat_events(req: Dict[str, Any]):
     # 立即落盘用户提问：即使客户端中途刷新/断开，问题也不会丢
     if message:
         await asyncio.to_thread(_append_message, session_id, {"role": "user", "text": message})
-    config = _make_config(session_id, req.get("passenger_id"))
+    config = _make_config(session_id, req.get("passenger_id"), req.get("user_id"))
 
     # ---- 方案3：评价意图 → 确定性预检索（不依赖模型“自觉”调用工具） ----
     # 命中评价意图时直接调 fetch_tavily_reviews（内部先查库、未命中再 Tavily、随后落库），
@@ -536,7 +547,9 @@ async def stream_chat_events(req: Dict[str, Any]):
             }
         )
         # 持久化本轮对话（用户提问 + 助手回复），刷新页面后可恢复
-        await _persist_stream_result(session_id, req, config, resp["reply"], pending, prefetch_reviews)
+        await _persist_stream_result(
+            session_id, req, config, resp["reply"], pending, prefetch_reviews,
+        )
         yield _sse_payload({"type": "final", **resp})
     finally:
         # 停止心跳并清理 worker 线程；最多等 5s，避免流已结束时被卡住的 worker 拖住事件循环
@@ -587,10 +600,6 @@ def _summarize_tool(name: str, args: dict) -> tuple:
         return "book", f"预订/修改酒店（{args.get('hotel') or args.get('name') or ''}）"
     if name == "cancel_hotel":
         return "cancel", f"取消酒店预订（{args.get('hotel') or args.get('name') or ''}）"
-    if name in ("book_excursion", "update_excursion"):
-        return "book", f"预订/修改游览（{args.get('excursion') or ''}）"
-    if name == "cancel_excursion":
-        return "cancel", f"取消游览预订（{args.get('excursion') or ''}）"
     # 只读/未知工具：返回空摘要，调用方据此跳过审批
     return "book", ""
 
@@ -790,7 +799,7 @@ async def handle_chat(req: Dict[str, Any]) -> Dict[str, Any]:
         )
         return resp
 
-    config = _make_config(session_id, req.get("passenger_id"))
+    config = _make_config(session_id, req.get("passenger_id"), req.get("user_id"))
 
     # ---- 方案3：评价意图 → 确定性预检索（详见 stream_chat_events 同名逻辑） ----
     prefetch_ctx: Optional[str] = None

@@ -17,6 +17,7 @@
             <el-dropdown-menu>
               <el-dropdown-item command="profile">个人信息</el-dropdown-item>
               <el-dropdown-item command="chat">智能助手</el-dropdown-item>
+              <el-dropdown-item command="travel-list">旅行清单</el-dropdown-item>
               <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -916,6 +917,8 @@ const handleUserCommand = (command) => {
     router.push('/profile')
   } else if (command === 'chat') {
     router.push('/chat')
+  } else if (command === 'travel-list') {
+    router.push('/travel-list')
   }
 }
 

@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.api.deps import get_current_user
 from app.services.langgraph_chat import (
     handle_chat, resume_chat, get_pending_interrupt, get_history, stream_chat_events,
 )
@@ -47,16 +48,20 @@ class ResumeRequest(BaseModel):
 
 
 @router.post('/chat', response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
-    result = await handle_chat(req.model_dump())
+async def chat(req: ChatRequest, current: dict = Depends(get_current_user)) -> ChatResponse:
+    payload = req.model_dump()
+    payload['user_id'] = current.get('id')
+    result = await handle_chat(payload)
     return ChatResponse(**result)
 
 
 @router.post('/chat/stream')
-async def chat_stream(req: ChatRequest) -> StreamingResponse:
+async def chat_stream(req: ChatRequest, current: dict = Depends(get_current_user)) -> StreamingResponse:
     """节点级 SSE 流式对话：边跑图边推送进度/文本事件，避免前端因长时间零字节而超时。"""
+    payload = req.model_dump()
+    payload['user_id'] = current.get('id')
     return StreamingResponse(
-        stream_chat_events(req.model_dump()),
+        stream_chat_events(payload),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -4,12 +4,16 @@
     <div class="chat-header">
       <div class="header-left">
         <h2>AI智能助手</h2>
-        <p>智能问答 · 航班查询 · 酒店搜索(高德) · 景点推荐</p>
+        <p>智能问答 · 航班查询 · 酒店搜索(高德) · 景点攻略评价</p>
       </div>
       <div class="header-right">
         <el-button @click="goToRoutePlanner" type="default" class="map-btn">
           <el-icon><Location /></el-icon>
           地图规划
+        </el-button>
+        <el-button @click="goTravelList" type="default" class="list-btn">
+          <el-icon><Collection /></el-icon>
+          旅行清单
         </el-button>
         <el-dropdown @command="handleCommand">
           <span class="el-dropdown-link">
@@ -42,13 +46,13 @@
             <el-icon><House /></el-icon>
             <span>酒店服务</span>
           </el-menu-item>
-          <el-menu-item index="3" @click="askAttraction">
-            <el-icon><Sunny /></el-icon>
-            <span>旅游景点</span>
-          </el-menu-item>
-          <el-menu-item index="4" @click="askReview">
+          <el-menu-item index="3" @click="askReview">
             <el-icon><Star /></el-icon>
             <span>景点攻略评价</span>
+          </el-menu-item>
+          <el-menu-item index="4" @click="goTravelList">
+            <el-icon><Collection /></el-icon>
+            <span>旅行清单</span>
           </el-menu-item>
         </el-menu>
       </div>
@@ -143,7 +147,7 @@
 import { ref, nextTick, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { User, ArrowDown, House, Location, Promotion, Star, Sunny } from '@element-plus/icons-vue'
+import { User, ArrowDown, Collection, House, Location, Promotion, Star } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { travelApi } from '@/api/travel'
 
@@ -152,7 +156,7 @@ const userStore = useUserStore()
 
 const input = ref('')
 const loading = ref(false)
-const messages = ref([{ role: 'assistant', text: '您好！我是AI智能助手。您可以：\n• 查询航班（如：从北京到上海的航班）\n• 搜索酒店（数据来自高德地图实时POI）\n• 让我推荐景点（如：我想到成都去玩，推荐一下景点）\n• 查询景点攻略评价（如：故宫的评价）\n请问有什么可以帮您的？' }])
+const messages = ref([{ role: 'assistant', text: '您好！我是AI智能助手。您可以：\n• 查询航班（如：从北京到上海的航班）\n• 搜索酒店（数据来自高德地图实时POI）\n• 查询景点攻略评价（如：故宫的评价）\n• 管理旅行清单（把想去的地方加入清单，在「旅行清单」页查看）\n请问有什么可以帮您的？' }])
 const activeMenu = ref('1')
 const messagesContainer = ref(null)
 
@@ -239,23 +243,6 @@ const askHotel = async () => {
     messages.value.push({ role: 'user', text: `在${city}搜索酒店` })
     scrollToBottom()
     await sendToAssistant(`在${city}搜索酒店`)
-  } catch {
-    // 用户取消
-  }
-}
-
-const askAttraction = async () => {
-  try {
-    const { value } = await ElMessageBox.prompt('请输入您想去游玩的城市或目的地', 'AI 景点推荐', {
-      confirmButtonText: '推荐',
-      cancelButtonText: '取消',
-      inputPattern: /\S+/,
-      inputErrorMessage: '目的地不能为空',
-    })
-    const dest = value.trim()
-    messages.value.push({ role: 'user', text: `我想到${dest}去玩，给我推荐一下景点` })
-    scrollToBottom()
-    await sendToAssistant(`我想到${dest}去玩，给我推荐一下景点`)
   } catch {
     // 用户取消
   }
@@ -445,6 +432,10 @@ const handleCommand = async (command) => {
 
 const goToRoutePlanner = () => {
   router.push('/route-planner')
+}
+
+const goTravelList = () => {
+  router.push('/travel-list')
 }
 </script>
 
@@ -741,4 +732,5 @@ const goToRoutePlanner = () => {
   font-size: 12px;
   color: #909399;
 }
+
 </style>

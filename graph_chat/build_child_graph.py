@@ -5,8 +5,7 @@ from langgraph.prebuilt import tools_condition
 
 from graph_chat.agent_assistant import update_flight_runnable, update_flight_sensitive_tools, update_flight_safe_tools, \
     book_hotel_runnable, \
-    book_hotel_safe_tools, book_hotel_sensitive_tools, book_excursion_runnable, book_excursion_safe_tools, \
-    book_excursion_sensitive_tools
+    book_hotel_safe_tools, book_hotel_sensitive_tools, travel_list_runnable, travel_list_tools
 from graph_chat.assistant import CtripAssistant
 from graph_chat.base_data_model import CompleteOrEscalate
 from graph_chat.entry_node import create_entry_node
@@ -172,29 +171,28 @@ def builder_hotel_graph(builder: StateGraph) -> StateGraph:
     return builder
 
 
-# 构建一个旅游产品的子图
-def builder_excursion_graph(builder: StateGraph) -> StateGraph:
-    # 添加入口节点，当需要预订游览或获取旅行推荐时使用
-    builder.add_node(
-        "enter_book_excursion",
-        create_entry_node("旅行推荐助理", "book_excursion"),  # 创建入口节点，指定助理名称和新对话状态
-    )
-    builder.add_node("book_excursion", CtripAssistant(book_excursion_runnable))  # 添加处理游览预订的实际节点
-    builder.add_edge("enter_book_excursion", "book_excursion")  # 连接入口节点到实际处理节点
+# 构建「旅行清单」子图（原「游览预订」子图原地改造）
+def builder_travel_list_graph(builder: StateGraph) -> StateGraph:
+    """构建旅行清单子助手：推荐景点 + 加入/移出/查看清单。
 
-    # 添加安全工具和敏感工具的节点
+    所有工具都是低风险操作（推荐、加清单、移出清单、查看清单），因此不再区分
+    safe / sensitive，也不需要 interrupt_before 人工审批。
+    """
     builder.add_node(
-        "book_excursion_safe_tools",
-        create_tool_node_with_fallback(book_excursion_safe_tools),  # 安全工具节点，通常只读查询
+        "enter_travel_list",
+        create_entry_node("旅行清单助理", "travel_list"),  # 创建入口节点，指定助理名称和新对话状态
     )
+    builder.add_node("travel_list", CtripAssistant(travel_list_runnable))  # 处理景点推荐与清单管理的实际节点
+    builder.add_edge("enter_travel_list", "travel_list")  # 连接入口节点到实际处理节点
+
     builder.add_node(
-        "book_excursion_sensitive_tools",
-        create_tool_node_with_fallback(book_excursion_sensitive_tools),  # 敏感工具节点，包含可能修改数据的操作
+        "travel_list_tools",
+        create_tool_node_with_fallback(travel_list_tools),  # 旅行清单工具节点（推荐 + 清单增删查）
     )
 
-    def route_book_excursion(state: dict):
+    def route_travel_list(state: dict):
         """
-        根据当前状态路由游览预订流程。
+        根据当前状态路由旅行清单流程。
 
         :param state: 当前对话状态字典
         :return: 下一步应跳转到的节点名
@@ -206,19 +204,15 @@ def builder_excursion_graph(builder: StateGraph) -> StateGraph:
         did_cancel = any(tc["name"] == CompleteOrEscalate.__name__ for tc in tool_calls)  # 检查是否调用了CompleteOrEscalate
         if did_cancel:
             return "leave_skill"  # 如果用户请求取消或退出，则跳转至leave_skill节点
-        safe_toolnames = [t.name for t in book_excursion_safe_tools]  # 获取所有安全工具的名字
-        if all(tc["name"] in safe_toolnames for tc in tool_calls):  # 如果所有调用的工具都是安全工具
-            return "book_excursion_safe_tools"  # 跳转至安全工具处理节点
-        return "book_excursion_sensitive_tools"  # 否则跳转至敏感工具处理节点
+        return "travel_list_tools"  # 否则交给工具节点执行（均为低风险工具）
 
-    # 添加边，连接敏感工具和安全工具节点回到游览预订处理节点
-    builder.add_edge("book_excursion_sensitive_tools", "book_excursion")
-    builder.add_edge("book_excursion_safe_tools", "book_excursion")
+    # 工具执行完回到旅行清单助手节点
+    builder.add_edge("travel_list_tools", "travel_list")
 
-    # 根据条件路由游览预订流程
+    # 根据条件路由旅行清单流程
     builder.add_conditional_edges(
-        "book_excursion",
-        route_book_excursion,
-        ["book_excursion_safe_tools", "book_excursion_sensitive_tools", "leave_skill", END],
+        "travel_list",
+        route_travel_list,
+        ["travel_list_tools", "leave_skill", END],
     )
     return builder

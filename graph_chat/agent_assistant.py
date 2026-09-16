@@ -7,8 +7,7 @@ from graph_chat.llm_config import llm
 from tools.amap_tools import amap_search_poi, amap_search_around, amap_geocode
 from tools.flights_tools import search_flights, update_ticket_to_new_flight, cancel_ticket
 from tools.hotels_tools import book_hotel, update_hotel, cancel_hotel
-from tools.trip_tools import search_trip_recommendations, book_excursion, update_excursion, cancel_excursion
-from tools.weather_tools import amap_get_weather
+from tools.wishlist_tools import add_to_wishlist, remove_from_wishlist, list_wishlist
 
 # 航班预订助手
 flight_booking_prompt = ChatPromptTemplate.from_messages(
@@ -83,40 +82,38 @@ book_hotel_runnable = book_hotel_prompt | llm.bind_tools(
     book_hotel_tools + [CompleteOrEscalate]
 )
 
-# 游览预订助手
-book_excursion_prompt = ChatPromptTemplate.from_messages(
+# 旅行清单助手（只管「加入 / 移出 / 查看」自己的旅行清单，不再做景点推荐）
+travel_list_prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "您是专门处理旅行推荐的助理。"
-            "当用户需要帮助预订推荐的旅行时，主助理会将工作委托给您。"
-            "根据用户的偏好搜索可用的旅行推荐，并与客户确认预订详情。"
-            "您可以使用高德地图工具搜索真实的景点、酒店、餐厅等POI信息，使用天气工具查询目的地天气。"
-            "如果用户提到具体位置，先用地理编码获取经纬度，再搜索周边景点。"
-            "如果您需要更多信息或客户改变主意，请将任务升级回主助理。"
-            "搜索 1 次即可，如果无匹配结果请直接告知用户并 CompleteOrEscalate 回主助手，不要重复搜索。"
-            "请记住，在相关工具成功使用后，预订才算完成。"
+            "您是专门负责「旅行清单」的助理，帮用户管理自己的旅行清单（想去的地方）。"
+            "当用户想查看自己的旅行清单，或想把某个地点加入 / 移出清单时，主助理会将工作委托给您。"
+            "把地点加入清单用 add_to_wishlist（传名称，若有城市 / 地址一并传入）；"
+            "把地点移出清单用 remove_from_wishlist（传名称即可）；查看当前清单用 list_wishlist。"
+            "这些都是低风险操作，直接执行，无需用户二次确认。"
+            "注意：本助手不提供「景点推荐」，也不要凭自身知识编造景点或来源；"
+            "若用户是想找景点、要推荐，请 CompleteOrEscalate 回主助手处理。"
             "\n当前时间: {time}."
             "\n\n如果用户需要帮助，并且您的工具都不适用，则"
             '“CompleteOrEscalate”对话给主助理。不要浪费用户的时间。不要编造无效的工具或功能。'
             "\n\n以下是一些你应该CompleteOrEscalate的例子：\n"
-            " - '我再考虑一下，可能单独预订'\n"
-            " - '我需要弄清楚我在那里的交通方式'\n"
-            " - '哦，等等，我还没预订航班，我会先订航班'\n"
-            " - '游览预订已确认！'",
+            " - '帮我推荐几个成都的景点'\n"
+            " - '我想看看有哪些好玩的地方'\n"
+            " - '我需要先订个航班再考虑景点'",
         ),
         ("placeholder", "{messages}"),
     ]
 ).partial(time=datetime.now())
 
-# 定义安全工具（只读操作）和敏感工具（涉及更改的操作）
-book_excursion_safe_tools = [search_trip_recommendations, amap_search_poi, amap_search_around, amap_geocode, amap_get_weather]
-book_excursion_sensitive_tools = [book_excursion, update_excursion, cancel_excursion]
+# 旅行清单助手的工具集（均为低风险操作，无需人工审批）
+travel_list_tools = [
+    add_to_wishlist,
+    remove_from_wishlist,
+    list_wishlist,
+]
 
-# 合并所有工具
-book_excursion_tools = book_excursion_safe_tools + book_excursion_sensitive_tools
-
-# 创建可运行对象，绑定游览预订提示模板和工具集，包括CompleteOrEscalate工具
-book_excursion_runnable = book_excursion_prompt | llm.bind_tools(
-    book_excursion_tools + [CompleteOrEscalate]
+# 创建可运行对象，绑定旅行清单提示模板和工具集，包括CompleteOrEscalate工具
+travel_list_runnable = travel_list_prompt | llm.bind_tools(
+    travel_list_tools + [CompleteOrEscalate]
 )

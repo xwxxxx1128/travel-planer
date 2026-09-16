@@ -7,7 +7,7 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
 
 from graph_chat.base_data_model import ToFlightBookingAssistant, ToHotelBookingAssistant, \
-    ToBookExcursion
+    ToTravelList
 from graph_chat.llm_config import llm
 from graph_chat.state import State
 from tools.amap_tools import amap_search_poi, amap_geocode, amap_search_around
@@ -15,7 +15,6 @@ from tools.flights_tools import fetch_user_flight_information, search_flights, u
     cancel_ticket
 from tools.hotels_tools import book_hotel, update_hotel, cancel_hotel
 from tools.retriever_vector import lookup_policy
-from tools.trip_tools import search_trip_recommendations, book_excursion, update_excursion, cancel_excursion
 from tools.weather_tools import amap_get_weather, amap_get_forecast
 from tools.route_planner import plan_route, get_route_distance
 from tools.reviews_tools import search_reviews
@@ -207,7 +206,10 @@ primary_assistant_prompt = ChatPromptTemplate.from_messages(
             "只有在用户明确要求以下操作时，才调用对应的委派工具路由到专门助理："
             " - 改签/取消机票 → ToFlightBookingAssistant"
             " - 预订酒店/修改酒店/取消酒店 → ToHotelBookingAssistant"
-            " - 预订游览/修改游览/取消游览 → ToBookExcursion"
+            " - 查看旅行清单 / 把地点加入或移出旅行清单 → ToTravelList"
+            ""
+            "注意：当用户表达「看看我的旅行清单」「管理我的旅行清单」「把某某加入/移出清单」时，"
+            "属于 ToTravelList 的职责，请委派给 ToTravelList。"
             ""
             "### 通用原则"
             "向客户提供详细的信息。"
@@ -243,7 +245,7 @@ assistant_runnable = primary_assistant_prompt | llm.bind_tools(
     + [
         ToFlightBookingAssistant,  # 用于转交航班更新或取消的任务
         ToHotelBookingAssistant,  # 用于转交酒店预订的任务
-        ToBookExcursion,  # 用于转交旅行推荐和其他游览预订的任务
+        ToTravelList,  # 用于转交旅行清单管理（加入/移出/查看）的任务
     ]
 )
 

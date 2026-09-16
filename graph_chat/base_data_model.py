@@ -62,22 +62,23 @@ class ToHotelBookingAssistant(BaseModel):
         }
 
 
-class ToBookExcursion(BaseModel):
+class ToTravelList(BaseModel):
     """
-    将工作转交给专门处理旅行推荐及其他游览预订的助理。
+    将工作转交给专门处理「旅行清单」的助理：为用户的旅行清单推荐景点，
+    并支持把景点加入 / 移出清单、查看清单。
     """
 
     location: str = Field(
-        description="用户想要预订推荐旅行的位置。"
+        description="用户想要获取景点推荐的城市或目的地。"
     )
     request: str = Field(
-        description="用户关于旅行推荐的任何额外信息或请求。"
+        description="用户关于景点推荐或旅行清单的任何额外信息或请求。"
     )
 
     class Config:
         json_schema_extra = {
             "示例": {
-                "location": "卢塞恩",
-                "request": "用户对户外活动和风景名胜感兴趣。",
+                "location": "成都",
+                "request": "用户想看看有什么好玩的景点，并挑几个加入旅行清单。",
             }
         }

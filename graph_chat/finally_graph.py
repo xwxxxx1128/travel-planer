@@ -8,9 +8,9 @@ from langgraph.prebuilt import tools_condition
 
 from graph_chat.assistant import CtripAssistant, assistant_runnable, primary_assistant_tools
 from graph_chat.base_data_model import ToFlightBookingAssistant, ToHotelBookingAssistant, \
-    ToBookExcursion
+    ToTravelList
 from graph_chat.build_child_graph import build_flight_graph, builder_hotel_graph, \
-    builder_excursion_graph
+    builder_travel_list_graph
 from tools.flights_tools import fetch_user_flight_information
 from graph_chat.draw_png import draw_graph
 from graph_chat.state import State
@@ -39,7 +39,7 @@ builder.add_edge(START, 'fetch_user_info')
 # 添加 三个业务助理 的 子工作流
 builder = build_flight_graph(builder)
 builder = builder_hotel_graph(builder)
-builder = builder_excursion_graph(builder)
+builder = builder_travel_list_graph(builder)
 
 # 添加主助理
 builder.add_node('primary_assistant', CtripAssistant(assistant_runnable))
@@ -62,8 +62,8 @@ def route_primary_assistant(state: dict):
             return "enter_update_flight"  # 跳转至航班预订入口节点
         elif tool_calls[0]["name"] == ToHotelBookingAssistant.__name__:
             return "enter_book_hotel"  # 跳转至酒店预订入口节点
-        elif tool_calls[0]["name"] == ToBookExcursion.__name__:
-            return "enter_book_excursion"  # 跳转至游览预订入口节点
+        elif tool_calls[0]["name"] == ToTravelList.__name__:
+            return "enter_travel_list"  # 跳转至旅行清单入口节点
         return "primary_assistant_tools"  # 否则跳转至主助理工具节点
     raise ValueError("无效的路由")  # 如果没有找到合适的工具调用，抛出异常
 
@@ -74,7 +74,7 @@ builder.add_conditional_edges(
     [
         "enter_update_flight",  # 航班 子助手的入口节点
         "enter_book_hotel",   # 酒店 子助手的入口节点
-        "enter_book_excursion",   # 旅游景点 子助手的入口节点
+        "enter_travel_list",   # 旅行清单 子助手的入口节点
         "primary_assistant_tools",  # 主助手的工具： 全网搜索工具，查询企业政策的工具
         END,
     ]
@@ -104,7 +104,6 @@ graph = builder.compile(
     interrupt_before=[
         "update_flight_sensitive_tools",
         "book_hotel_sensitive_tools",
-        "book_excursion_sensitive_tools",
     ]
 )
 
