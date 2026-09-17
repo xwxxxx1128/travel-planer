@@ -15,6 +15,10 @@
           <el-icon><Collection /></el-icon>
           旅行清单
         </el-button>
+        <el-button @click="goMyFlights" type="default" class="flight-btn">
+          <el-icon><Tickets /></el-icon>
+          我的航班
+        </el-button>
         <el-dropdown @command="handleCommand">
           <span class="el-dropdown-link">
             <el-icon><User /></el-icon>
@@ -53,6 +57,10 @@
           <el-menu-item index="4" @click="goTravelList">
             <el-icon><Collection /></el-icon>
             <span>旅行清单</span>
+          </el-menu-item>
+          <el-menu-item index="5" @click="goMyFlights">
+            <el-icon><Tickets /></el-icon>
+            <span>我的航班</span>
           </el-menu-item>
         </el-menu>
       </div>
@@ -101,6 +109,22 @@
                         <span>起飞 {{ ft.dep_time }}</span>
                         <span>到达 {{ ft.arr_time }}</span>
                       </div>
+                      <div class="flight-actions">
+                        <el-button
+                          v-if="!ft.added"
+                          size="small"
+                          type="primary"
+                          plain
+                          :loading="!!ft.booking"
+                          @click="onBookFromCard(ft)"
+                        >
+                          <el-icon><CirclePlus /></el-icon>
+                          加入我的航班
+                        </el-button>
+                        <el-tag v-else size="small" type="success" effect="light">
+                          已加入「我的航班」
+                        </el-tag>
+                      </div>
                     </div>
                   </div>
                   <div v-if="message.hotels && message.hotels.length" class="hotel-list">
@@ -147,7 +171,7 @@
 import { ref, nextTick, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { User, ArrowDown, Collection, House, Location, Promotion, Star } from '@element-plus/icons-vue'
+import { User, ArrowDown, Collection, House, Location, Promotion, Star, Tickets, CirclePlus } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { travelApi } from '@/api/travel'
 
@@ -156,7 +180,7 @@ const userStore = useUserStore()
 
 const input = ref('')
 const loading = ref(false)
-const messages = ref([{ role: 'assistant', text: '您好！我是AI智能助手。您可以：\n• 查询航班（如：从北京到上海的航班）\n• 搜索酒店（数据来自高德地图实时POI）\n• 查询景点攻略评价（如：故宫的评价）\n• 管理旅行清单（把想去的地方加入清单，在「旅行清单」页查看）\n请问有什么可以帮您的？' }])
+const messages = ref([{ role: 'assistant', text: '您好！我是AI智能助手。您可以：\n• 查询航班班次（如：从北京到上海的航班）\n• 预订航班 / 查看我的航班（如：帮我订一张北京到上海的机票；在「我的航班」页查看）\n• 搜索酒店（数据来自高德地图实时POI）\n• 查询景点攻略评价（如：故宫的评价）\n• 管理旅行清单（把想去的地方加入清单，在「旅行清单」页查看）\n请问有什么可以帮您的？' }])
 const activeMenu = ref('1')
 const messagesContainer = ref(null)
 
@@ -253,10 +277,11 @@ const sendToAssistant = async (text, place = null) => {
   const idx = messages.value.length
   messages.value.push({ role: 'assistant', text: '', loading: true })
   scrollToBottom()
+  // 会话 id：用用户名（登录后稳定）作为会话标识，驱动域状态栈与中断点恢复。
+  // 注意：用户身份由后端按登录令牌解析（user_id），前端不传任何身份字段，避免越权。
+  const sessionId = userStore.userInfo?.username || 'demo'
+  localStorage.setItem('chat_session_id', sessionId)
   try {
-    const passenger = userStore.userInfo?.username || 'demo'
-    // 固化会话 id：刷新后用同一个 id 去读历史，保证“保存/读取”成对
-    localStorage.setItem('chat_session_id', passenger)
     // 把当前轮之前的完整对话历史传给后端（对话记忆 / Checkpointer 的 history 维度）
     const history = messages.value
       .slice(0, idx)
@@ -271,8 +296,7 @@ const sendToAssistant = async (text, place = null) => {
         message: text,
         history,
         place,
-        passenger,
-        session_id: passenger, // 用用户名作为会话 id，驱动域状态栈与中断点恢复
+        session_id: sessionId, // 会话隔离标识（后端据此恢复中断点与历史）
       },
       (ev) => {
         if (!ev || ev.type === undefined) return
@@ -321,7 +345,7 @@ const sendToAssistant = async (text, place = null) => {
       // 主动拉一次历史：若最后一条正是本次提问对应的助手回复，则直接恢复，
       // 避免“一直思考到超时、刷新后才看到答案”的体验问题。
       try {
-        const hist = await travelApi.getHistory(passenger)
+        const hist = await travelApi.getHistory(sessionId)
         if (Array.isArray(hist) && hist.length) {
           const last = hist[hist.length - 1]
           const lastUserText = hist
@@ -391,6 +415,53 @@ const handleSensitiveConfirm = async (confirm, idx) => {
   }
 }
 
+// 航班卡片「加入我的航班」：复用与聊天完全相同的敏感操作确认流程。
+// 后端只把 book_flight 挂到图的 interrupt_before 中断点上（不写库），
+// 前端弹同一个确认框；确认后再通过 /chat/resume 才真正写入「我的航班」。
+const onBookFromCard = async (ft) => {
+  if (ft.added || ft.booking) return
+  const sessionId = userStore.userInfo?.username || 'demo'
+  localStorage.setItem('chat_session_id', sessionId)
+  ft.booking = true
+  try {
+    const res = await travelApi.bookFlightFromCard({
+      session_id: sessionId,
+      flight_no: ft.flight_no,
+      departure_city: ft.departure_city,
+      arrival_city: ft.arrival_city,
+      depart_time: ft.dep_time,
+      arrive_time: ft.arr_time,
+    })
+    const confirm = res?.confirm
+    if (!confirm) {
+      ElMessage.warning(res?.reply || '未能发起预订，请稍后重试。')
+      return
+    }
+    try {
+      await ElMessageBox.confirm(
+        `请确认预订操作：\n${confirm.summary}`,
+        '确认预订机票',
+        { confirmButtonText: '确认', cancelButtonText: '再想想', type: 'warning' }
+      )
+    } catch {
+      await travelApi.resumeChat({ session_id: sessionId, approved: false })
+      ElMessage.info('已取消该操作，未做任何改动。')
+      return
+    }
+    const act = await travelApi.resumeChat({ session_id: sessionId, approved: true })
+    ft.added = true
+    ElMessage.success('已加入「我的航班」，可在「我的航班」页查看')
+    if (act?.reply) {
+      messages.value.push({ role: 'assistant', text: act.reply })
+      scrollToBottom()
+    }
+  } catch (e) {
+    // 拦截器已统一提示
+  } finally {
+    ft.booking = false
+  }
+}
+
 const quickAction = (text) => {
   input.value = text
   ask()
@@ -436,6 +507,10 @@ const goToRoutePlanner = () => {
 
 const goTravelList = () => {
   router.push('/travel-list')
+}
+
+const goMyFlights = () => {
+  router.push('/flights')
 }
 </script>
 
@@ -690,6 +765,11 @@ const goTravelList = () => {
   margin-top: 6px;
   font-size: 12px;
   color: #909399;
+}
+.flight-actions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 /* 酒店卡片 */

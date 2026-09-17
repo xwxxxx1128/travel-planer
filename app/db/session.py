@@ -86,6 +86,62 @@ def _ensure_columns() -> None:
             logger.warning("创建 reviews.poi_key 索引失败（可忽略）")
 
 
+def _migrate_flight_bookings() -> None:
+    """个人航班表迁移（轻量迁移）。
+
+    历史库中该表名为 flights（与 demo 班次库同名、易混淆），现统一为 flight_bookings，
+    并补齐 status / booking_no 列。必须在 create_all 之前执行，以便保留已有数据。
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+
+    if "flight_bookings" not in tables and "flights" in tables:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE flights RENAME TO flight_bookings"))
+        logger.info("个人航班表迁移：flights -> flight_bookings")
+        tables.discard("flights")
+        tables.add("flight_bookings")
+
+    if "flight_bookings" not in tables:
+        return
+
+    existing = {col["name"] for col in inspect(engine).get_columns("flight_bookings")}
+    with engine.begin() as conn:
+        if "status" not in existing:
+            conn.execute(
+                text("ALTER TABLE flight_bookings ADD COLUMN status VARCHAR(16) DEFAULT 'booked'")
+            )
+            logger.info("个人航班表补齐缺失列：flight_bookings.status")
+        if "booking_no" not in existing:
+            conn.execute(
+                text("ALTER TABLE flight_bookings ADD COLUMN booking_no VARCHAR(32)")
+            )
+            logger.info("个人航班表补齐缺失列：flight_bookings.booking_no")
+
+
+def _drop_legacy_user_columns() -> None:
+    """清理历史遗留列。
+
+    passenger_id 已废弃（个人航班订单改为按 user_id 隔离，见 app/models/flight.py）。
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "users" not in set(inspector.get_table_names()):
+        return
+    existing = {col["name"] for col in inspector.get_columns("users")}
+    if "passenger_id" not in existing:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users DROP COLUMN passenger_id"))
+        logger.info("用户表清理遗留列：users.passenger_id")
+    except Exception:  # 个别 sqlite 版本不支持 DROP COLUMN，忽略即可（该列已不再被使用）
+        logger.warning("清理 users.passenger_id 失败（可忽略）")
+
+
 def init_db() -> None:
     """建表 + 轻量迁移（强化库表建立环节）。
 
@@ -93,6 +149,8 @@ def init_db() -> None:
     - 输出明确的初始化日志（含数据库地址），便于排查“评价缓存未生效”类问题；
     - 通过 _ensure_columns 为历史库补齐评价缓存新增列（poi_key 等），
       避免 create_all 不补列导致旧库缺列、缓存静默降级为每次现调 Tavily；
+    - 通过 _migrate_flight_bookings 把历史 flights 表迁移为 flight_bookings 并补列；
+    - 通过 _drop_legacy_user_columns 清理 users.passenger_id 等遗留列；
     - 初始化失败时记录完整堆栈并抛出，不再静默吞掉。
     """
     try:
@@ -106,8 +164,11 @@ def init_db() -> None:
             flight,
         )
 
+        # 需在 create_all 之前执行：把历史 flights 改名为 flight_bookings 以保留数据
+        _migrate_flight_bookings()
         Base.metadata.create_all(bind=engine)
         _ensure_columns()
+        _drop_legacy_user_columns()
         logger.info("数据库初始化完成：%s", _safe_db_url())
     except Exception:
         logger.exception("数据库初始化失败：%s", _safe_db_url())

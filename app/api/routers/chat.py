@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from app.api.deps import get_current_user
 from app.services.langgraph_chat import (
     handle_chat, resume_chat, get_pending_interrupt, get_history, stream_chat_events,
+    prepare_flight_booking,
 )
 from fastapi.responses import StreamingResponse
 
@@ -24,8 +25,7 @@ class ChatRequest(BaseModel):
     message: str
     history: List[ChatMessage] = []
     place: Optional[str] = None
-    passenger: Optional[str] = None
-    session_id: Optional[str] = None   # 用于 Checkpointer 区分会话（缺省用 passenger）
+    session_id: Optional[str] = None   # 用于 Checkpointer 区分会话
     api_key: Optional[str] = None
     base_url: Optional[str] = None
 
@@ -47,18 +47,34 @@ class ResumeRequest(BaseModel):
     approved: bool
 
 
+class BookFlightFromCardRequest(BaseModel):
+    """航班卡片「加入我的航班」请求（字段取自卡片上的结构化班次信息）。"""
+
+    session_id: str
+    flight_no: str
+    departure_city: str
+    arrival_city: str
+    depart_time: str
+    arrive_time: str
+
+
 @router.post('/chat', response_model=ChatResponse)
 async def chat(req: ChatRequest, current: dict = Depends(get_current_user)) -> ChatResponse:
     payload = req.model_dump()
+    # 用户身份由服务端按登录令牌解析（忽略前端任何身份字段，避免越权）
     payload['user_id'] = current.get('id')
     result = await handle_chat(payload)
     return ChatResponse(**result)
 
 
 @router.post('/chat/stream')
-async def chat_stream(req: ChatRequest, current: dict = Depends(get_current_user)) -> StreamingResponse:
+async def chat_stream(
+    req: ChatRequest,
+    current: dict = Depends(get_current_user),
+) -> StreamingResponse:
     """节点级 SSE 流式对话：边跑图边推送进度/文本事件，避免前端因长时间零字节而超时。"""
     payload = req.model_dump()
+    # 用户身份由服务端按登录令牌解析（忽略前端任何身份字段，避免越权）
     payload['user_id'] = current.get('id')
     return StreamingResponse(
         stream_chat_events(payload),
@@ -72,9 +88,29 @@ async def chat_stream(req: ChatRequest, current: dict = Depends(get_current_user
 
 
 @router.post('/chat/resume', response_model=ChatResponse)
-async def chat_resume(req: ResumeRequest) -> ChatResponse:
+async def chat_resume(
+    req: ResumeRequest,
+    current: dict = Depends(get_current_user),
+) -> ChatResponse:
     """恢复被 interrupt 挂起的敏感操作（human-in-the-loop 的 approve/拒绝分支）。"""
-    result = await resume_chat(req.session_id, req.approved)
+    # 恢复时要按用户隔离地写库（如 book_flight / cancel_my_flight），故带上 user_id
+    result = await resume_chat(req.session_id, req.approved, current.get('id'))
+    return ChatResponse(**result)
+
+
+@router.post('/chat/book-flight', response_model=ChatResponse)
+async def chat_book_flight(
+    req: BookFlightFromCardRequest,
+    current: dict = Depends(get_current_user),
+) -> ChatResponse:
+    """航班卡片「加入我的航班」：发起预订并返回待确认信息（**不直接写库**）。
+
+    与聊天里的敏感操作共用同一套机制：先把 book_flight 挂在 interrupt_before 上，
+    前端弹同一个确认框；用户确认后再走 /chat/resume 才真正写入「我的航班」。
+    """
+    result = await prepare_flight_booking(
+        req.session_id, current.get('id'), req.model_dump()
+    )
     return ChatResponse(**result)
 
 

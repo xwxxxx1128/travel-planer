@@ -4,12 +4,12 @@
 `graph_chat` 包（LangGraph 多助理对话图）重建其接口，供 `app/api/routers/chat.py` 调用。
 
 设计要点：
-- 直接复用 graph_chat 的构建块编译出与 CLI/Gradio 版本一致的图，但**不**触发
-  `finally_graph` 中的副作用（update_dates() 会覆盖航班库、draw_graph 需要额外依赖），
-  以保证在 API 进程启动时可安全导入。
+- 基于 `graph_chat` 包（LangGraph 多助理对话图）编译出系统实际使用的对话图，是本项目
+  唯一的对话图定义；本模块的 `graph` 同时被 langgraph.json 注册为 `ctrip_agent`
+  （LangGraph Studio / CLI 的入口）。
 - 使用 langgraph 的 SqliteSaver 作为持久化检查点（落盘到 app/data/checkpoints.sqlite，
   容器内即 app_data 卷），每个会话以 session_id 作为 thread_id 隔离；进程重启后会话不丢失。
-- 敏感工具（改签/预订/取消）前设置了 interrupt_before，需用户批准后才执行。
+- 敏感工具（预订/取消航班、酒店）前设置了 interrupt_before，需用户批准后才执行。
 
 对外提供：handle_chat / resume_chat / get_pending_interrupt / get_history
 """
@@ -21,6 +21,7 @@ import logging
 import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -36,6 +37,12 @@ from app.services.review_intent import (
     build_material_context,
     detect_review_intent,
     no_material_context,
+)
+from app.services.flight_intent import (
+    build_flight_context,
+    detect_route_intent,
+    no_flight_context,
+    to_card_flights,
 )
 from graph_chat.assistant import (
     CtripAssistant,
@@ -53,12 +60,9 @@ from graph_chat.build_child_graph import (
     builder_travel_list_graph,
 )
 from graph_chat.state import State
-from tools.flights_tools import fetch_user_flight_information
 from tools.tools_handler import create_tool_node_with_fallback
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_PASSENGER_ID = "3442 587242"
 
 # 单次对话请求的总时长预算（秒）。聊天接口是非流式的，一次查询会串行跑「路由→子助手→
 # 工具→子助手→路由」多步，每步都调用大模型。当模型慢/限流时累计很容易超过前端 axios
@@ -74,6 +78,9 @@ _STREAM_BUDGET = 240
 # 评价“确定性预检索”（方案3）的单次时长上限（秒）：命中评价意图时会在进图前先调
 # fetch_tavily_reviews（内部先查库、未命中再联网），避免其慢/挂起拖垮整轮对话。
 _REVIEW_PREFETCH_TIMEOUT = 25
+# 航班班次“确定性预检索”的单次时长上限（秒）：命中班次意图时会在进图前直接查询本地
+# 航班班次库，避免其慢/挂起拖垮整轮对话。
+_FLIGHT_PREFETCH_TIMEOUT = 20
 APPROVAL_PROMPT = (
     "AI助手马上根据你要求，执行相关操作。"
     "您是否批准上述操作？输入'y'继续；否则，请说明您请求的更改。"
@@ -83,8 +90,8 @@ APPROVAL_PROMPT = (
 # 时，才需要用户手动批准。其余一律视为只读/安全工具，不弹审批框。
 # 注：旅行清单相关的“加入/移出清单”属于低风险操作，不进此集合，无需审批。
 _KNOWN_SENSITIVE = {
-    "update_ticket_to_new_flight",
-    "cancel_ticket",
+    "book_flight",
+    "cancel_my_flight",
     "book_hotel",
     "update_hotel",
     "cancel_hotel",
@@ -94,7 +101,7 @@ _READONLY_TOOLS = {
     "search_flights",
     "search_hotels",
     "lookup_policy",
-    "fetch_user_flight_information",
+    "list_my_flights",
     "amap_search_poi",
     "amap_search_around",
     "amap_geocode",
@@ -150,28 +157,10 @@ def _is_resolved(session_id: str, tool_call_id: Optional[str]) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# 编译对话图（与 graph_chat.finally_graph 结构一致，但不带副作用）
+# 编译对话图（本项目唯一的对话图定义）
 # --------------------------------------------------------------------------- #
-# 用户航班信息缓存：fetch_user_flight_information.invoke({}) 每次都新建 sqlite 连接并查询，
-# 而该工具在未传入具体乘客配置时始终返回默认乘客信息（进程内不变）。
-# 缓存后可免去每次请求的无条件 DB 查询（对标 trip_assistant 中“按需/可缓存”的查询思路），
-# 仅在首次请求时真正查库，后续直接复用，降低入口节点的固定开销。
-# 注意：务必用默认乘客 ID（字符串）作 key，不能用 state["user_info"]（payload 列表不可哈希，
-# 经 checkpointer 还原后会变成列表，直接 .get 会抛 TypeError）。
-_user_info_cache: Dict[str, Any] = {}
-_user_info_lock = threading.Lock()
-
-
-def _get_user_info(state: State) -> Dict[str, Any]:
-    key = DEFAULT_PASSENGER_ID
-    cached = _user_info_cache.get(key)
-    if cached is None:
-        with _user_info_lock:
-            cached = _user_info_cache.get(key)
-            if cached is None:
-                cached = fetch_user_flight_information.invoke({})
-                _user_info_cache[key] = cached
-    return {"user_info": cached}
+# 个人航班订单按 user_id 隔离读写（见 tools/flight_bookings_tools.py）；用户身份由服务端
+# 在图运行配置里注入 user_id（见 _make_config），不再有全局预取或 passenger_id 机制。
 
 
 def _route_primary_assistant(state: dict) -> str:
@@ -190,17 +179,27 @@ def _route_primary_assistant(state: dict) -> str:
     raise ValueError("无效的路由")
 
 
+def _dialog_state_tail(dialog_state) -> Optional[str]:
+    """取对话状态栈顶的节点名（结果为字符串）。
+
+    dialog_state 走 update_dialog_stack 归约器，期望写入的是「单个字符串」。历史上
+    有过把列表写进该字段的写法，会在栈里留下嵌套列表（如 [['update_flight']]）；
+    这里统一向下取到最内层的字符串，既能修正常规读取，也能自愈已被写坏的历史会话。
+    """
+    current = dialog_state
+    while isinstance(current, (list, tuple)):
+        if not current:
+            return None
+        current = current[-1]
+    return str(current) if current is not None else None
+
+
 def _route_to_workflow(state: dict) -> str:
-    dialog_state = state.get("dialog_state")
-    if not dialog_state:
-        return "primary_assistant"
-    return dialog_state[-1]
+    return _dialog_state_tail(state.get("dialog_state")) or "primary_assistant"
 
 
 def _build_graph():
     builder = StateGraph(State)
-    builder.add_node("fetch_user_info", _get_user_info)
-    builder.add_edge(START, "fetch_user_info")
 
     builder = build_flight_graph(builder)
     builder = builder_hotel_graph(builder)
@@ -224,8 +223,14 @@ def _build_graph():
         ],
     )
     builder.add_edge("primary_assistant_tools", "primary_assistant")
-    builder.add_conditional_edges("fetch_user_info", _route_to_workflow)
+    # 入口：按对话状态直接路由到主助手或当前激活的子流程。
+    builder.add_conditional_edges(
+        START,
+        _route_to_workflow,
+        ["primary_assistant", "update_flight", "book_hotel", "travel_list"],
+    )
 
+#统一前置：编译图的时候统一声明："在即将进入这两个工具节点之前，先给我停下来"。
     return builder.compile(
         checkpointer=_checkpointer,
         interrupt_before=[
@@ -258,22 +263,18 @@ _load_approval_ledger()
 # --------------------------------------------------------------------------- #
 # 会话辅助
 # --------------------------------------------------------------------------- #
-def _make_config(
-    session_id: str,
-    passenger_id: Optional[str] = None,
-    user_id: Optional[int] = None,
-) -> Dict[str, Any]:
+def _make_config(session_id: str, user_id: Optional[int] = None) -> Dict[str, Any]:
     """构造图运行配置。
 
-    除会话/乘客外，额外注入：
-    - user_id：旅行清单按用户隔离，对话工具（add_to_wishlist 等）据此定位当前用户；
+    额外注入：
+    - user_id：按用户隔离的数据（旅行清单、个人航班订单）对话工具据此定位当前用户；
     - session_id：供审批台账 _pending_confirm 按会话去重（刷新后不重复弹框）。
     """
     configurable: Dict[str, Any] = {
         "thread_id": session_id,
-        "passenger_id": passenger_id or DEFAULT_PASSENGER_ID,
         "session_id": session_id,
     }
+    # 用户身份由服务端按登录令牌解析后注入，对话工具据此按用户隔离地读写数据。
     if user_id is not None:
         configurable["user_id"] = user_id
     return {"configurable": configurable}
@@ -328,7 +329,6 @@ def _extract_text(content: Any) -> str:
 
 # 节点中文别名：让前端进度提示更友好（仅展示用，不影响逻辑）
 _NODE_LABELS = {
-    "fetch_user_info": "读取用户信息",
     "primary_assistant": "主助手思考",
     "primary_assistant_tools": "调用工具",
     "update_flight": "航班助手处理",
@@ -359,7 +359,7 @@ async def stream_chat_events(req: Dict[str, Any]):
     # 立即落盘用户提问：即使客户端中途刷新/断开，问题也不会丢
     if message:
         await asyncio.to_thread(_append_message, session_id, {"role": "user", "text": message})
-    config = _make_config(session_id, req.get("passenger_id"), req.get("user_id"))
+    config = _make_config(session_id, req.get("user_id"))
 
     # ---- 方案3：评价意图 → 确定性预检索（不依赖模型“自觉”调用工具） ----
     # 命中评价意图时直接调 fetch_tavily_reviews（内部先查库、未命中再 Tavily、随后落库），
@@ -382,8 +382,33 @@ async def stream_chat_events(req: Dict[str, Any]):
         except Exception as exc:  # noqa: BLE001
             logger.warning("评价预检索异常（%s）：%s", poi, exc)
             prefetch_ctx = no_material_context(poi)
-    # 预取材料与用户问题分两条消息注入：先材料、后问题（材料缺失时注入“无材料”提示）
-    input_messages = ([("user", prefetch_ctx)] if prefetch_ctx else []) + [("user", message)]
+    # ---- 航班班次意图 → 直查本地班次库（确定性预检索，模型只负责转述真实数据） ----
+    flight_ctx: Optional[str] = None
+    flight_cards: List[Dict[str, Any]] = []
+    route_intent = detect_route_intent(message) if message else None
+    if route_intent:
+        dep_city, arr_city = route_intent
+        logger.info("检测到航班班次查询 %s -> %s，直查本地班次库", dep_city, arr_city)
+        yield _sse_payload({"type": "status", "text": f"正在查询「{dep_city} → {arr_city}」航班班次…"})
+        try:
+            flight_ctx, rows = await asyncio.wait_for(
+                asyncio.to_thread(build_flight_context, dep_city, arr_city),
+                timeout=_FLIGHT_PREFETCH_TIMEOUT,
+            )
+            flight_cards = to_card_flights(dep_city, arr_city, rows)
+        except asyncio.TimeoutError:
+            logger.warning("航班班次预检索超时（%s -> %s）", dep_city, arr_city)
+            flight_ctx = no_flight_context(dep_city, arr_city)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("航班班次预检索异常（%s -> %s）：%s", dep_city, arr_city, exc)
+            flight_ctx = no_flight_context(dep_city, arr_city)
+
+    # 预取材料与用户问题分多条消息注入：先材料、后问题（材料缺失时注入“无材料”提示）
+    input_messages = (
+        ([("user", prefetch_ctx)] if prefetch_ctx else [])
+        + ([("user", flight_ctx)] if flight_ctx else [])
+        + [("user", message)]
+    )
 
     loop = asyncio.get_running_loop()
     queue: "asyncio.Queue" = asyncio.Queue()
@@ -503,7 +528,7 @@ async def stream_chat_events(req: Dict[str, Any]):
             if remaining <= 0:
                 # 总预算耗尽：即便超时也先把已算出的答案落盘，刷新页面即可恢复
                 logger.warning("stream_chat 总预算耗尽（session=%s）", session_id)
-                await _persist_stream_result(session_id, req, config, last_reply, _pending(config), prefetch_reviews)
+                await _persist_stream_result(session_id, req, config, last_reply, _pending(config), prefetch_reviews, flight_cards)
                 yield _sse_payload({"type": "error", "text": "本次请求处理超时（总时长上限）。请稍后重试，或换一个更简短的问题。"})
                 return
             try:
@@ -511,7 +536,7 @@ async def stream_chat_events(req: Dict[str, Any]):
             except asyncio.TimeoutError:
                 # 两次产出间隔超预算仍无字节 → 超时时同样落盘已有答案，结束流
                 logger.warning("stream_chat 产出间隔超时（session=%s）", session_id)
-                await _persist_stream_result(session_id, req, config, last_reply, _pending(config), prefetch_reviews)
+                await _persist_stream_result(session_id, req, config, last_reply, _pending(config), prefetch_reviews, flight_cards)
                 yield _sse_payload({"type": "error", "text": "模型响应较慢，本次请求已超时。请稍后重试，或换一个更简短的问题。"})
                 return
             if item is sentinel:
@@ -544,11 +569,12 @@ async def stream_chat_events(req: Dict[str, Any]):
                 "confirm": _pending_confirm(config) if pending else None,
                 "escalated": pending,
                 "reviews": prefetch_reviews,
+                "flights": flight_cards,
             }
         )
         # 持久化本轮对话（用户提问 + 助手回复），刷新页面后可恢复
         await _persist_stream_result(
-            session_id, req, config, resp["reply"], pending, prefetch_reviews,
+            session_id, req, config, resp["reply"], pending, prefetch_reviews, flight_cards,
         )
         yield _sse_payload({"type": "final", **resp})
     finally:
@@ -568,8 +594,8 @@ def _sse_payload(data: Dict[str, Any]) -> str:
 
 def _current_intent(config) -> Optional[str]:
     state = graph.get_state(config)
-    dialog_state = (state.values or {}).get("dialog_state") or []
-    return dialog_state[-1] if dialog_state else None
+    # 归一化为字符串：ChatResponse.intent 是 str，若返回列表会导致响应校验失败（500）
+    return _dialog_state_tail((state.values or {}).get("dialog_state"))
 
 
 def _pending(config) -> bool:
@@ -585,17 +611,15 @@ def _summarize_tool(name: str, args: dict) -> tuple:
     注意：search_flights 等只读工具不应出现在这里；若传入只读工具名直接返回空摘要，
     由调用方判定为“无需审批”。
     """
-    if name == "update_ticket_to_new_flight":
-        dep = args.get("departure_airport") or ""
-        arr = args.get("arrival_airport") or ""
-        new_fid = args.get("new_flight_id") or ""
-        ticket = args.get("ticket_no") or ""
-        return "book", (
-            f"将机票 {ticket} 改签/预订至新航班（航班ID {new_fid}，{dep} → {arr}）"
-        )
-    if name == "cancel_ticket":
-        ticket = args.get("ticket_no") or ""
-        return "cancel", f"取消机票（票号 {ticket}）"
+    if name == "book_flight":
+        fno = args.get("flight_no") or ""
+        dep = args.get("departure_city") or ""
+        arr = args.get("arrival_city") or ""
+        dt = args.get("depart_time") or ""
+        return "book", f"预订航班 {fno}（{dep} → {arr}，起飞 {dt}）"
+    if name == "cancel_my_flight":
+        target = args.get("flight_no_or_id") or ""
+        return "cancel", f"取消我的航班订单（{target}）"
     if name in ("book_hotel", "update_hotel"):
         return "book", f"预订/修改酒店（{args.get('hotel') or args.get('name') or ''}）"
     if name == "cancel_hotel":
@@ -732,11 +756,13 @@ def _upsert_assistant(
     assistant_text: str,
     confirm=None,
     reviews: Optional[List[Dict[str, Any]]] = None,
+    flights: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """把本轮助手回复写入历史：若末条已是助手消息则覆盖其文本，否则追加。
 
     用于流式过程中的增量落盘，保证任意时刻刷新都能恢复已产生的内容。
-    reviews：本轮确定性预检索（方案3）得到的结构化评价条目，供前端直接展示。
+    reviews：本轮确定性预检索得到的结构化评价条目，供前端直接展示。
+    flights：本轮确定性预检索得到的真实航班班次，供前端直接展示。
     """
     if not assistant_text:
         return
@@ -747,7 +773,7 @@ def _upsert_assistant(
             "role": "assistant",
             "text": assistant_text,
             "reviews": reviews or [],
-            "flights": [],
+            "flights": flights or [],
             "hotels": [],
             "confirm": confirm,
         }
@@ -768,6 +794,7 @@ async def _persist_stream_result(
     reply: str,
     pending: bool,
     reviews: Optional[List[Dict[str, Any]]] = None,
+    flights: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """把本轮助手回复落盘到 chat_history。用户提问已在流式开始时落盘，这里只写/更新助手回复。
 
@@ -778,7 +805,7 @@ async def _persist_stream_result(
     text = (reply or "").strip() or (APPROVAL_PROMPT if pending else "")
     if not text:
         return
-    await asyncio.to_thread(_upsert_assistant, session_id, text, confirm, reviews)
+    await asyncio.to_thread(_upsert_assistant, session_id, text, confirm, reviews, flights)
 
 
 # --------------------------------------------------------------------------- #
@@ -799,7 +826,7 @@ async def handle_chat(req: Dict[str, Any]) -> Dict[str, Any]:
         )
         return resp
 
-    config = _make_config(session_id, req.get("passenger_id"), req.get("user_id"))
+    config = _make_config(session_id, req.get("user_id"))
 
     # ---- 方案3：评价意图 → 确定性预检索（详见 stream_chat_events 同名逻辑） ----
     prefetch_ctx: Optional[str] = None
@@ -853,6 +880,7 @@ async def handle_chat(req: Dict[str, Any]) -> Dict[str, Any]:
             "confirm": _pending_confirm(config) if pending else None,
             "escalated": pending,
             "reviews": prefetch_reviews,
+            "flights": flight_cards,
         }
     )
     # 持久化本轮对话（用户提问 + 助手回复），保证刷新页面后可恢复
@@ -872,8 +900,13 @@ async def handle_chat(req: Dict[str, Any]) -> Dict[str, Any]:
     return resp
 
 
-async def resume_chat(session_id: str, approved: bool) -> Dict[str, Any]:
-    config = _make_config(session_id)
+async def resume_chat(
+    session_id: str,
+    approved: bool,
+    user_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    # 恢复敏感操作（如预订 / 取消航班）时同样需要 user_id，才能按用户隔离地写库
+    config = _make_config(session_id, user_id)
     # 先记录本次中断已被处理（批准/拒绝），无论后续是否成功执行，刷新页面都不会再重复弹框
     try:
         confirm = _pending_confirm(config)
@@ -980,6 +1013,76 @@ async def resume_chat(session_id: str, approved: bool) -> Dict[str, Any]:
             "hotels": resp.get("hotels", []),
             "confirm": None,
         },
+    )
+    return resp
+
+
+async def prepare_flight_booking(
+    session_id: str,
+    user_id: Optional[int],
+    flight: Dict[str, Any],
+) -> Dict[str, Any]:
+    """航班卡片「加入我的航班」：把预订挂到敏感工具的中断点上，返回待确认信息。
+
+    关键点：这里**不直接写库**。它把 book_flight（敏感工具）作为一次待执行的工具调用
+    写进图状态，图的 interrupt_before 会让流程停在「待人工确认」处；前端弹的是与聊天
+    完全相同的确认框（confirm 载荷同构），用户批准后再走 /chat/resume 真正执行写库——
+    因此“敏感操作必须先确认”的既有设定原样保留。
+
+    参数 flight 需包含：flight_no / departure_city / arrival_city / depart_time / arrive_time。
+    """
+    config = _make_config(session_id, user_id)
+    args = {
+        "flight_no": str(flight.get("flight_no") or "").strip(),
+        "departure_city": str(flight.get("departure_city") or "").strip(),
+        "arrival_city": str(flight.get("arrival_city") or "").strip(),
+        "depart_time": str(flight.get("depart_time") or "").strip(),
+        "arrive_time": str(flight.get("arrive_time") or "").strip(),
+    }
+    if not all(args.values()):
+        return _error_response("航班信息不完整，无法发起预订。", {"session_id": session_id})
+
+    try:
+        graph.update_state(
+            config,
+            {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "book_flight",
+                                "args": args,
+                                "id": f"book-flight-{uuid.uuid4().hex[:12]}",
+                            }
+                        ],
+                    )
+                ],
+                # 必须传字符串：dialog_state 走 update_dialog_stack 归约器，传列表会被
+                # 当成“一个元素”追加成嵌套列表，使 _current_intent 返回列表并导致
+                # ChatResponse.intent 校验失败（500）。写法与 create_entry_node 保持一致。
+                "dialog_state": "update_flight",
+            },
+            as_node="update_flight",
+        )
+        # 兜底：若上一步没把“下一步”定到敏感工具节点，则驱动一次图让它停在
+        # interrupt_before 处。interrupt_before 保证此时不会真正执行 book_flight，
+        # 因此绝不会在用户确认前写库。
+        if not _pending(config):
+            _run_graph(None, config)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("发起航班预订失败（session=%s）", session_id)
+        return _error_response(f"发起预订失败：{exc}", {"session_id": session_id})
+
+    pending = _pending(config)
+    resp = _base_response({"session_id": session_id})
+    resp.update(
+        {
+            "reply": APPROVAL_PROMPT if pending else "未能发起预订，请稍后重试。",
+            "intent": _current_intent(config) or "general",
+            "confirm": _pending_confirm(config) if pending else None,
+            "escalated": pending,
+        }
     )
     return resp
 

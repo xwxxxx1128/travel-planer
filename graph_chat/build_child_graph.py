@@ -38,7 +38,7 @@ def build_flight_graph(builder: StateGraph) -> StateGraph:
         create_entry_node("Flight Updates & Booking Assistant", "update_flight"),  # 创建入口节点，指定助理名称和新对话状态
     )
     builder.add_node("update_flight", CtripAssistant(update_flight_runnable))  # 添加处理航班更新的实际节点
-    builder.add_edge("enter_update_flight", "update_flight")  # 连接入口节点到实际处理节点
+    builder.add_edge("enter_update_flight", "update_flight")  # 入口 → 航班处理节点
 
     # 添加敏感工具和安全工具的节点
     builder.add_node(

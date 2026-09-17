@@ -61,13 +61,17 @@ export const travelApi = {
       }
     })
   },
-  flightAction: (data) => api.post('/chat/flight-action', data),
   // 中断点恢复：把用户对敏感操作的“批准/拒绝”回传给后端 Checkpointer
   resumeChat: (data) => api.post('/chat/resume', data),
+  // 航班卡片「加入我的航班」：发起预订（后端只挂中断点，确认后才写库）
+  bookFlightFromCard: (data) => api.post('/chat/book-flight', data),
   pendingChat: (session_id) => api.get('/chat/pending', { params: { session_id } }),
   getHistory: (session_id) => api.get('/chat/history/' + encodeURIComponent(session_id)),
   // 旅行清单（按登录用户隔离）
   wishlistList: () => api.get('/wishlist'),
   wishlistAdd: (data) => api.post('/wishlist', data),
   wishlistRemove: (id) => api.delete('/wishlist/' + id),
+  // 我的航班（个人航班订单，按登录用户隔离；订单只能由 AI 在对话中代订）
+  flightList: (params) => api.get('/flights', { params }),
+  flightCancel: (id) => api.delete('/flights/' + id),
 }

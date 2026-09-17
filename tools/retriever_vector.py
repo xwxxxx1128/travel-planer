@@ -81,7 +81,7 @@ def get_retriever():
 
 @tool
 def lookup_policy(query: str) -> str:
-    """在携程退改签/订单 FAQ 知识库中检索与用户问题最相关的政策片段。
+    """在退改签/订单 FAQ 知识库中检索与用户问题最相关的政策片段。
     主路径使用 Chroma 向量库做语义相似度召回（真正的 RAG）；
     当 chroma 不可用（未安装/未初始化）时，降级到 numpy 内存向量 + 点积相似度，保证功能不中断。
     """

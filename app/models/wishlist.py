@@ -10,7 +10,7 @@ class WishlistItem(Base):
     """旅行清单条目：用户想去的景点/地点，按用户隔离。
 
     取代原「游览预订」语义（booked 标记）。数据存于应用自身的库（SQLAlchemy），
-    与旅行 demo 库 travel_new.sqlite 解耦，不会被测试期的 update_dates() 重置。
+    与旅行 demo 库 travel_new.sqlite 解耦，不会被班次数据集的重置 / 日期平移影响。
     """
 
     __tablename__ = 'travel_wishlist'

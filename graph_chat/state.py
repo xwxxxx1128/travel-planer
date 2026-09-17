@@ -28,13 +28,11 @@ class State(TypedDict):
     字段:
         messages (list[AnyMessage]): 使用 Annotated 注解附加了 add_messages 功能的消息列表，
                                      可能用于自动处理消息的某些方面。
-        user_info (str): 存储用户信息的字符串。
         dialog_state (list[Literal["assistant", "update_flight",
                                     "book_hotel", "travel_list"]]): 对话状态栈，限定只能包含特定的几个值，
                                     并使用 update_dialog_stack 函数来控制其更新逻辑。
     """
     messages: Annotated[list[AnyMessage], add_messages]#[类型，功能] Annotated 用于在类型注解中附加额外的信息或功能，这里它将 add_messages 功能与 messages 字段关联起来，可能用于自动处理消息的某些方面。
-    user_info: str
     dialog_state: Annotated[
         list[  # 其元素严格限定为上述五个字符串值之一。这种做法确保了对话状态管理逻辑的一致性和正确性，避免了意外的状态值导致的潜在问题。
             Literal[

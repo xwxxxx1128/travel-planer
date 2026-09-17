@@ -4,9 +4,9 @@
   ],
   "graphs": {
     "ctrip_agent": {
-      "path": "graph_chat.finally_graph:graph",
+      "path": "app.services.langgraph_chat:graph",
       "title": "出行规划智能助手",
-      "description": "出行规划智能助手，支持航班预定、酒店查询、行程规划等服务"
+      "description": "出行规划智能助手，支持航班预订、酒店查询、行程规划等服务"
     }
   },
   "env": {

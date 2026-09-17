@@ -20,6 +20,7 @@ import os
 import re
 from typing import Optional
 
+from app.services.city_names import CITIES
 from tools.reviews_tools import fetch_tavily_reviews_sync
 
 logger = logging.getLogger(__name__)
@@ -50,13 +51,8 @@ _GENERIC_BLOCK = (
     "住宿", "价格", "费用", "规划", "行程",
 )
 
-# 常见城市（用于从问句里粗略抽取城市，可扩展）
-_CITIES = (
-    "北京", "上海", "广州", "深圳", "成都", "重庆", "杭州", "南京", "西安", "武汉",
-    "长沙", "青岛", "厦门", "苏州", "天津", "三亚", "桂林", "丽江", "大理", "昆明",
-    "哈尔滨", "大连", "济南", "烟台", "郑州", "沈阳", "福州", "无锡", "宁波", "珠海",
-    "香港", "澳门", "台北",
-)
+# 常见城市（用于从问句里粗略抽取城市；与航班意图识别共用同一份列表）
+_CITIES = CITIES
 
 # 口语化填充词（抽景点名时剥离）
 _FILLER_WORDS = (
