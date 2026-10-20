@@ -2,7 +2,7 @@
 
 > 一个面向复杂旅行规划场景的 **LLM Agent 应用**：基于 LangGraph 编排多子 Agent，完成多景点行程排序与规划、酒店/餐饮推荐、航班/游览预订（数据库模拟）、地图路线规划、景点评价/攻略实时检索，并提供 Vue3 + FastAPI 全栈实现与 Docker 一键部署。
 
-![行程规划演示](docs/demo.gif)
+![行程规划演示](docs/demodemo.gif)
 
 ---
 
@@ -32,7 +32,7 @@
 
 | 亮点 | 说明 |
 | --- | --- |
-| **多 Agent 协作编排** | 基于 LangGraph 构建主助理 + 航班改签、酒店预订、游览预订子图，支持工具调用、状态共享与子 Agent 委托。 |
+| **多 Agent 协作编排** | 基于 LangGraph 构建主助理 + 航班预订、酒店预订、旅行清单子图，支持工具调用、状态共享与子 Agent 委托。 |
 | **ReAct + Tool Calling** | 主助理通过 `bind_tools` 动态调用搜索、地图、航班、酒店、评价等工具，实现“思考 → 行动 → 观察”闭环。 |
 | **实时联网检索（Tavily）** | 景点评价/攻略通过 Tavily MCP 实时联网检索，命中评价意图时确定性预检索，避免大模型凭记忆编造。 |
 | **RAG 向量检索** | 政策 FAQ 基于 OpenAI Embeddings + Chroma 向量库检索；POI/评论类知识通过 Chroma 集合增量补充。 |
@@ -79,7 +79,7 @@ trip_assistant_L/
 │  ├─ api/                   # 接口层（routers 与各路由实现）
 │  ├─ core/                  # 配置（config / runtime_config）
 │  ├─ db/                    # 数据库连接与初始化
-│  ├─ graph/                 # LangGraph 编排入口
+│  ├─ graph_chat/             # LangGraph 编排：入口/主助理/子图/状态（真正的编排实现）
 │  ├─ models/                # ORM 模型
 │  ├─ schemas/               # Pydantic 请求/响应模型
 │  ├─ services/              # 业务服务（聊天、调度、知识库）
@@ -246,8 +246,7 @@ SECRET_KEY=随机字符串
 - `GET /api/auth/me`：当前用户信息
 - `GET /api/config/runtime`：读取运行时配置
 - `POST /api/config/runtime`：保存运行时配置
-- `POST /api/chat/stream`：流式对话
-- `POST /api/travel/plan`：生成行程
+- `POST /api/chat/stream`：流式对话（含对话式行程规划等能力）
 - `GET /api/maps/search`：POI 搜索
 - `POST /api/maps/route`：路线规划
 
@@ -257,9 +256,13 @@ SECRET_KEY=随机字符串
 
 ## 11. 测试
 
+回归测试统一收敛到 `tests/` 目录（原 `tests2/` 的纯指标脚本已移除，有价值的行为回归已并入）：
+
 ```bash
 pytest -q tests
 ```
+
+> 说明：原 `tests2/` 下硬编码数字的基准脚本（工具清单 / 图拓扑 / 意图准确率 / 压测等）不是稳定回归，已删除；幻觉拦截、工具降级、审批幂等、检查点持久化、MCP 握手等行为回归已并入 `tests/`。
 
 ---
 

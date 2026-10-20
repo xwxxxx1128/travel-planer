@@ -1,4 +1,8 @@
-"""鉴权链路单测：受保护接口需令牌、/me 走 Header、refresh 续期、类型校验。"""
+"""鉴权链路单测：受保护接口需令牌、/me 走 Header、refresh 续期、令牌类型校验。
+
+注意：原先用例用 `/api/graph/status` 作为「受保护接口」探针，但该路由已随第二套
+规划实现一并移除；现改用同样受 `get_current_user` 保护的 `/api/wishlist` 作为探针。
+"""
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -17,13 +21,15 @@ def _register_and_login(client: TestClient, username: str, password: str = "secr
 
 def test_protected_endpoint_requires_token():
     client = _client()
-    resp = client.get("/api/graph/status")
+    # 未带令牌访问受保护接口应被拒（401）
+    resp = client.get("/api/wishlist")
     assert resp.status_code == 401
 
 
 def test_invalid_token_rejected():
     client = _client()
-    resp = client.get("/api/graph/status", headers={"Authorization": "Bearer not-a-real-token"})
+    # 伪造令牌应被拒（401）
+    resp = client.get("/api/wishlist", headers={"Authorization": "Bearer not-a-real-token"})
     assert resp.status_code == 401
 
 
@@ -33,7 +39,8 @@ def test_login_returns_tokens_and_me_reads_header():
     assert data["access_token"] and data["refresh_token"]
 
     headers = {"Authorization": f"Bearer {data['access_token']}"}
-    assert client.get("/api/graph/status", headers=headers).status_code == 200
+    # 带有效令牌访问受保护接口应成功（200）
+    assert client.get("/api/wishlist", headers=headers).status_code == 200
 
     me = client.get("/api/auth/me", headers=headers)
     assert me.status_code == 200
@@ -48,7 +55,7 @@ def test_refresh_issues_new_access_token():
     assert r.status_code == 200
     new_access = r.json()["access_token"]
 
-    ok = client.get("/api/graph/status", headers={"Authorization": f"Bearer {new_access}"})
+    ok = client.get("/api/wishlist", headers={"Authorization": f"Bearer {new_access}"})
     assert ok.status_code == 200
 
 

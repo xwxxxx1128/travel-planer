@@ -1,3 +1,5 @@
+import logging
+
 from langchain_core.messages import ToolMessage
 from langgraph.constants import END
 from langgraph.graph import StateGraph
@@ -10,6 +12,8 @@ from graph_chat.assistant import CtripAssistant
 from graph_chat.base_data_model import CompleteOrEscalate
 from graph_chat.entry_node import create_entry_node
 from tools.tools_handler import create_tool_node_with_fallback
+
+logger = logging.getLogger(__name__)
 
 # 同一子流程内对“搜索”类工具的调用次数上限。模型的提示词鼓励“坚持不懈 /
 # 如果第一次搜索没有结果，请扩大查询范围”，当数据库里没有匹配结果时可能反复调用
@@ -68,6 +72,13 @@ def build_flight_graph(builder: StateGraph) -> StateGraph:
         if all(tc["name"] in safe_tool_names for tc in tool_calls):  # 如果所有调用的工具都是安全工具
             # 防止反复搜索同一航班形成长循环：超过上限直接退出子流程
             if _count_tool_calls(state["messages"], "search_flights") > _MAX_FLIGHT_SEARCH_ATTEMPTS:
+                # 触发即告警：用于统计“搜索上限命中率”，据此判断阈值是否合理
+                # （频繁触发=阈值太紧；从不触发=阈值太松。grep "搜索超过上限" 即可统计）
+                logger.warning(
+                    "航班搜索超过上限（%d 次，实际 %d 次），强制退出子流程",
+                    _MAX_FLIGHT_SEARCH_ATTEMPTS,
+                    _count_tool_calls(state["messages"], "search_flights"),
+                )
                 return "leave_skill"
             return "update_flight_safe_tools"  # 跳转至安全工具处理节点
         return "update_flight_sensitive_tools"  # 否则跳转至敏感工具处理节点
@@ -154,6 +165,11 @@ def builder_hotel_graph(builder: StateGraph) -> StateGraph:
                 + _count_tool_calls(state["messages"], "amap_search_around")
             )
             if amap_search_count > _MAX_HOTEL_SEARCH_ATTEMPTS:
+                logger.warning(
+                    "酒店搜索超过上限（%d 次，实际 %d 次），强制退出子流程",
+                    _MAX_HOTEL_SEARCH_ATTEMPTS,
+                    amap_search_count,
+                )
                 return "leave_skill"
             return "book_hotel_safe_tools"  # 跳转至安全工具处理节点
         return "book_hotel_sensitive_tools"  # 否则跳转至敏感工具处理节点

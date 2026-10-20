@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # 配置后向量库走 HTTP 服务；留空则退回本地嵌入式 PersistentClient（便于本地开发）。
     CHROMA_HTTP_URL: str = ''
 
+    # Redis 缓存连接串（政策检索结果等 KV 缓存）。
+    # 连不上或未部署 Redis 时自动降级为进程内存缓存，单机开发零依赖也能跑。
+    REDIS_URL: str = Field(default='redis://localhost:6379/0')
+
     OPENAI_API_KEY: str = ''
     OPENAI_BASE_URL: str = ''
     OPENAI_MODEL: str = 'gpt-4o-mini'
@@ -44,3 +48,4 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+#Settings：环境变量、数据库/Chroma 路径、模型 Key

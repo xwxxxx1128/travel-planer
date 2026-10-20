@@ -62,7 +62,7 @@ def _resolve_llm_config() -> dict:
     """优先取前端保存的运行时配置，未设置则回退到环境变量 / 默认值。"""
     runtime = get_runtime_config()
     return {
-        "temperature": float(runtime.openai_temperature or os.getenv("OPENAI_TEMPERATURE", "0.2")),
+        "temperature": float(runtime.openai_temperature or os.getenv("OPENAI_TEMPERATURE") or 0.2),
         "model": runtime.openai_model or os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3"),
         "openai_api_key": runtime.openai_api_key or os.getenv("OPENAI_API_KEY"),
         "openai_api_base": runtime.openai_base_url or os.getenv("OPENAI_BASE_URL"),

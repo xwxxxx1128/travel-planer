@@ -75,13 +75,5 @@ def main() -> None:
     # uvicorn.run(app, host='0.0.0.0', port=8000, reload=True)生产环境应该禁止热重载
 
 
-class Server:
-    def __init__(self):
-        base_dir = Path(__file__).resolve().parent
-        build_frontend(base_dir)
-        from app.main import create_app
-        self.app = create_app()
-
-
 if __name__ == '__main__':
     main()

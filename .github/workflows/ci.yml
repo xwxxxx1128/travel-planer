@@ -29,9 +29,11 @@ jobs:
       env:
         OPENAI_API_KEY: dummy-ci-key-not-real
       run: |
-        pytest tests/ -v --cov=api --cov=db --cov=utils --cov-report=xml
+        pytest tests/ -v --cov=app --cov-report=xml
 
     - name: 上传测试覆盖率
+      # 上传失败不应掩盖测试本身的结果（如私有仓库未配 CODECOV_TOKEN）
+      continue-on-error: true
       uses: codecov/codecov-action@v3
       with:
         file: ./coverage.xml

@@ -1,14 +1,6 @@
 ﻿import api from './index'
 
 export const travelApi = {
-  createPlan: (data) => api.post('/travel/plan', data),
-  demoPlan: () => api.get('/travel/plan/demo'),
-  listPois: () => api.get('/knowledge/pois'),
-  listHotels: () => api.get('/knowledge/hotels'),
-  listRestaurants: () => api.get('/knowledge/restaurants'),
-  listReviews: () => api.get('/knowledge/reviews'),
-  crawlReviews: (data) => api.post('/crawl/reviews', data),
-  graphStatus: () => api.get('/graph/status'),
   sendChat: (data) => api.post('/chat', data),
   // 节点级 SSE 流式对话：用原生 fetch 读取 text/event-stream，逐块回调
   sendChatStream: (data, onEvent) => {

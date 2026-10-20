@@ -1,1 +1,1 @@
-﻿"""Ctrip travel planner app."""
+﻿"""trip travel planner app."""

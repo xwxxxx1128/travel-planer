@@ -1,3 +1,7 @@
+#runtime_config.py（前端「个人信息/服务配置」页可改的运行时配置，与 .env 双向同步，如高德 Key、模型 Key）
+
+
+
 from __future__ import annotations
 
 import os
@@ -137,3 +141,5 @@ def save_runtime_config(updates: Mapping[str, str | None]) -> RuntimeConfig:
     except Exception:
         pass
     return _current_config()
+
+

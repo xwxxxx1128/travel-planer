@@ -10,7 +10,6 @@ from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import init_db
-from app.graph.engine import build_graph
 from app.services.scheduler import start_scheduler, shutdown_scheduler
 from tools.init_db import sync_flight_dataset
 
@@ -39,7 +38,6 @@ def _index_response(index_path: Path) -> FileResponse:
 def create_app() -> FastAPI:
     configure_logging()
     init_db()
-    build_graph()
     # 航班班次数据集：平移日期到「今天+30 天」为最新，并补齐国内主流航线。
     # 关掉可设 FLIGHT_DATA_SYNC=0；pytest 下会自动跳过。
     sync_flight_dataset()

@@ -4,7 +4,7 @@
       <div class="auth-hero">
         <div class="brand">Trip plan AI</div>
         <h1>地图选点，路线一键规划</h1>
-        <p>支持搜索景区、直接在地图上点选目的地，并把多个地点串成更顺路的行程。</p>
+        <p>支持地点搜索、评价/攻略获取，地图上选定目的地，自动规划出行。</p>
       </div>
 
       <el-card class="auth-card" shadow="always">

@@ -9,6 +9,7 @@ from langchain_openai import OpenAIEmbeddings
 from app.core.runtime_config import get_runtime_config
 # 复用项目统一的 Chroma 单例（与评论检索共用 persist 目录），做真正的向量语义召回。
 from app.services.knowledge import vector_store
+from app.services.cache import cache as _kv_cache
 
 basic_dir = Path(__file__).resolve().parent.parent
 
@@ -68,8 +69,13 @@ retriever = None
 
 # 查询结果缓存：lookup_policy 每次都会触发 embed_query（一次 embedding 网络往返），
 # 相同/相似问题重复命中时直接复用，省掉一次网络请求，降低政策类问答的固定延迟。
-_policy_cache: dict[str, str] = {}
-_POLICY_CACHE_LIMIT = 64
+# 依托 app/services/cache.py：优先 Redis（多进程/多实例共享、重启不丢、可配 TTL），
+# Redis 不可用时自动降级为进程内存（带条数上限），行为与原先的 dict 缓存一致。
+_POLICY_CACHE_TTL = int(os.getenv("POLICY_CACHE_TTL", "3600"))
+
+
+def _policy_cache_key(query: str) -> str:
+    return f"policy:{(query or '').strip()}"
 
 
 def get_retriever():
@@ -85,9 +91,10 @@ def lookup_policy(query: str) -> str:
     主路径使用 Chroma 向量库做语义相似度召回（真正的 RAG）；
     当 chroma 不可用（未安装/未初始化）时，降级到 numpy 内存向量 + 点积相似度，保证功能不中断。
     """
-    key = (query or "").strip()
-    if key and key in _policy_cache:
-        return _policy_cache[key]
+    cache_key = _policy_cache_key(query)
+    cached = _kv_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
     emb_model = get_embeddings_model()
     q_emb = emb_model.embed_query(query)
@@ -101,11 +108,7 @@ def lookup_policy(query: str) -> str:
         docs_hit = [d["page_content"] for d in get_retriever().query(query, k=3)]
 
     result = "\n\n".join(docs_hit)
-    if key:
-        # 简单 LRU：超限时清空，避免无界增长
-        if len(_policy_cache) >= _POLICY_CACHE_LIMIT:
-            _policy_cache.clear()
-        _policy_cache[key] = result
+    _kv_cache.set(cache_key, result, ttl=_POLICY_CACHE_TTL)
     return result
 
 

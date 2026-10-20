@@ -1,8 +1,9 @@
-﻿import jwt
+﻿#被 app/tools/auth_tool.py 引用它做密码哈希/校验
+import jwt
 from datetime import datetime, timedelta, timezone
 
 from app.core.config import settings
-from utils.password_hash import get_hashed_password as hash_password, verify_password as _verify_password
+from app.tools.password_hash import get_hashed_password as hash_password, verify_password as _verify_password
 
 
 SECRET = settings.SECRET_KEY

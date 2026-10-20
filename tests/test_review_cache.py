@@ -1,5 +1,4 @@
 """评价检索缓存单测：mock Tavily，验证「一个月内同地先查库」与 force_refresh 行为。"""
-
 import pytest
 from unittest.mock import AsyncMock, patch
 
