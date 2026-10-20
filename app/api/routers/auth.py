@@ -2,6 +2,7 @@
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.config import get_admin_usernames
 from app.db.session import get_session
 from app.models.user import User
 from app.schemas.auth import (
@@ -28,7 +29,9 @@ def _subject(user: User) -> str:
 
 
 def _to_profile(user: User) -> UserProfile:
-    return UserProfile.model_validate(user, from_attributes=True)
+    profile = UserProfile.model_validate(user, from_attributes=True)
+    profile.is_admin = user.username in get_admin_usernames()
+    return profile
 
 
 @router.post('/register', response_model=UserProfile)

@@ -22,6 +22,7 @@ class UserProfile(BaseModel):
     email: str | None = None
     real_name: str | None = None
     preference: str | None = None
+    is_admin: bool = False
 
 
 class TokenResponse(BaseModel):

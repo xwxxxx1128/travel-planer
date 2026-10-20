@@ -6,6 +6,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.tools.auth_tool import TOKEN_TYPE_ACCESS, verify_token
 
+from app.core.config import get_admin_usernames
+
 # auto_error=False：未带凭证时由我们自己返回统一的 401，而不是 FastAPI 默认的 403
 _bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -40,3 +42,16 @@ def get_current_user(
         'id': int(user_id) if user_id.isdigit() else 0,
         'username': username or sub,
     }
+
+
+def require_admin(current: dict = Depends(get_current_user)) -> dict:
+    """在登录校验基础上，要求当前用户属于管理员名单（ADMIN_USERNAMES），否则返回 403。
+
+    用于「服务配置」等全局敏感接口：未登录 -> 401，已登录但非管理员 -> 403。
+    """
+    if current['username'] not in get_admin_usernames():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='仅管理员可访问服务配置',
+        )
+    return current

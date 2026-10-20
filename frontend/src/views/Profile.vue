@@ -8,7 +8,7 @@
         </div>
       </template>
 
-      <el-form :model="form" label-position="top" class="profile-form">
+      <el-form v-if="isAdmin" :model="form" label-position="top" class="profile-form">
         <el-alert type="info" :closable="false" show-icon class="secret-tip"
           title="出于安全考虑，API Key 已脱敏展示；留空或显示 **** 时表示保留原值，不会覆盖服务器现有配置。" />
 
@@ -56,6 +56,10 @@
           <el-button text @click="goToRoutePlanner">返回地图页</el-button>
         </div>
       </el-form>
+
+      <el-alert v-else type="info" :closable="false" show-icon
+        title="服务配置仅管理员可修改"
+        description="全站共用一套服务端 API 配置，普通用户无需也不可修改。" />
     </el-card>
   </div>
 </template>
@@ -65,9 +69,13 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { configApi } from '@/api/config'
+import { authApi } from '@/api/auth'
+import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
+const userStore = useUserStore()
 const saving = ref(false)
+const isAdmin = ref(!!userStore.userInfo?.is_admin)
 const form = reactive({
   openai_api_key: '',
   openai_base_url: '',
@@ -95,7 +103,12 @@ const loadConfig = async () => {
     const config = await configApi.getRuntimeConfig()
     _fillForm(config)
   } catch (error) {
-    ElMessage.error('读取配置失败')
+    if (error?.response?.status === 403) {
+      isAdmin.value = false
+      ElMessage.warning('当前账号无服务配置权限')
+    } else {
+      ElMessage.error('读取配置失败')
+    }
   }
 }
 
@@ -125,7 +138,18 @@ const goToRoutePlanner = () => {
   router.push('/route-planner')
 }
 
-onMounted(loadConfig)
+onMounted(async () => {
+  // 优先用最新 /auth/me 校正管理员身份（localStorage 里的 userInfo 可能是旧版，缺少 is_admin）
+  try {
+    const me = await authApi.me()
+    isAdmin.value = !!me?.is_admin
+    userStore.userInfo = me
+    localStorage.setItem('userInfo', JSON.stringify(me))
+  } catch {
+    isAdmin.value = false
+  }
+  if (isAdmin.value) await loadConfig()
+})
 </script>
 
 <style scoped>

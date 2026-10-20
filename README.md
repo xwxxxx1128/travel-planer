@@ -39,7 +39,7 @@
 | **MCP 协议扩展** | 路线规划、网页搜索等能力以 MCP Server 形态暴露，可被 Claude Desktop / Cursor / 自研 Agent 复用。 |
 | **Human-in-the-Loop** | 航班预订/取消等敏感操作触发中断，前端二次确认后继续执行，确保关键写操作可控。 |
 | **流式交互体验** | 对话采用 SSE 节点级流式输出，首字秒级出现；地图页支持实时路线规划与可视化。 |
-| **运行时配置中心** | 大模型 Key / 模型名 / Temperature、高德 Key、Tavily Key 等均可在前端「个人信息 / 服务配置」页维护，持久化到服务端，无需每次登录重填。 |
+| **运行时配置中心** | 大模型 Key / 模型名 / Temperature、高德 Key、Tavily Key 等均可在前端「个人信息 / 服务配置」页维护（仅管理员），持久化到服务端，无需每次登录重填。 |
 | **全栈工程化** | FastAPI + SQLAlchemy + Vue3 + Vite + Element Plus + Pinia，支持 Docker Compose 一键部署。 |
 
 ---
@@ -119,8 +119,8 @@ trip_assistant_L/
 
 项目支持两种配置方式（优先级：前端运行时配置 > 根目录 `.env`）：
 
-1. **推荐**：启动后访问 `http://127.0.0.1:8000/ui`，进入「个人信息 / 服务配置」页面填写并保存。
-2. **备用**：复制 `.env.example` 为 `.env` 并填入密钥：
+1. **前端「服务配置」页（仅管理员）**：启动后访问 `http://127.0.0.1:8000/ui`，用管理员账号登录后进入「个人信息 / 服务配置」页填写并保存。管理员由 `.env` 的 `ADMIN_USERNAMES` 指定（见 §8）。
+2. **`.env` 文件（任何部署方式通用）**：复制 `.env.example` 为 `.env` 并填入密钥：
 
 ```bash
 cp .env.example .env
@@ -173,11 +173,12 @@ docker compose up --build
 
 启动后：
 
-- 后端：`http://127.0.0.1:8000`
-- 前端：`http://127.0.0.1:3000`
-- Chroma：`http://127.0.0.1:8001`
+- 前端（统一入口）：`http://127.0.0.1:3000`（nginx 内部将 `/api` 反代到 backend:8000）
+- 后端 / Chroma / MCP 服务：仅容器内网互通（`expose`），默认不映射宿主机端口，统一经前端 3000 访问
 
 > 容器通过 `env_file: .env` 读取环境变量；数据库与向量库持久化目录已被 `.gitignore` 忽略。
+
+**公网部署（共享配置 + 管理员）**：`.env` 不随 Git 上传；部署时在服务器上手动创建 `.env` 并填入部署者的共享 Key，`docker compose` 会经 `env_file` 注入容器，所有访客共用这套 Key（费用归属部署者）。同时在 `.env` 设置 `ADMIN_USERNAMES=你的管理员用户名`，使只有管理员能在网页修改配置，普通注册用户无法查看或覆盖共享 Key。
 
 ---
 
@@ -207,9 +208,12 @@ CHROMA_PERSIST_DIR=./chroma_db
 
 # JWT 密钥
 SECRET_KEY=随机字符串
+
+# 管理员（逗号分隔，仅这些账号可修改服务配置）
+ADMIN_USERNAMES=admin
 ```
 
-> 上述配置均可在前端「个人信息 / 服务配置」页维护，保存后写入 `.env` 并立即更新 `os.environ`，无需手动改文件。
+> 上述配置均可在前端「个人信息 / 服务配置」页维护（仅管理员），保存后写入 `.env` 并立即更新 `os.environ`，无需手动改文件。
 
 ---
 
@@ -244,10 +248,10 @@ SECRET_KEY=随机字符串
 - `POST /api/auth/register`：注册
 - `POST /api/auth/login`：登录
 - `GET /api/auth/me`：当前用户信息
-- `GET /api/config/runtime`：读取运行时配置
-- `POST /api/config/runtime`：保存运行时配置
+- `GET /api/config/runtime`：读取运行时配置（仅管理员）
+- `POST /api/config/runtime`：保存运行时配置（仅管理员）
 - `POST /api/chat/stream`：流式对话（含对话式行程规划等能力）
-- `GET /api/maps/search`：POI 搜索
+- `GET /api/maps/poi`：POI 搜索
 - `POST /api/maps/route`：路线规划
 
 完整接口列表见运行后的 `http://127.0.0.1:8000/docs`。

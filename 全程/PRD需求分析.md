@@ -31,14 +31,14 @@
 | 反幻觉 | 评价类问题 100% 走确定性预检索（DB → Tavily → 写库），回答可溯源（title / url） |
 | 写操作安全 | 预订 / 改签 / 取消 100% 经 HITL 二次确认后写库 |
 | 体验 | SSE 流式输出，首字秒级；敏感确认框断线后可恢复（`/chat/pending`） |
-| 部署 | `docker compose up --build` 一键起后端(8000) / 前端(3000) / Chroma(8001) |
+| 部署 | `docker compose up --build` 一键起后端(8000) / 前端(3000) / Chroma(容器内 8000)；对外仅暴露前端 3000 |
 
 ## 3. 用户与角色
 
 | 角色 | 说明 |
 | --- | --- |
 | 游客 | 仅可访问登录 / 注册页 |
-| 注册用户 | 系统唯一业务角色，全部业务功能；数据按 `user_id` 隔离【事实：chat 接口服务端解析令牌取 `user_id`，忽略前端身份字段防越权】 |
+| 注册用户 | 基础业务角色，全部业务功能（服务配置仅 `ADMIN_USERNAMES` 管理员可用）；数据按 `user_id` 隔离【事实：chat 接口服务端解析令牌取 `user_id`，忽略前端身份字段防越权】 |
 | 部署者 | 不进系统，通过 `.env` / Docker Compose 管理 |
 
 前端路由守卫：`requiresAuth` 页面先查本地 token，再调 `authApi.me()` 校验真实性；401 时 axios 拦截器用 refresh token 静默续期【事实：`frontend/src/router/index.js`】。
@@ -128,7 +128,7 @@ SSE 流式输出（text/event-stream，X-Accel-Buffering: no）
 | Agent 编排 | LangGraph | AutoGen / 自研状态机 | 原生支持图状态机、Checkpointer 会话持久化、`interrupt_before` HITL、子图嵌套——与本项目 HITL + 会话恢复需求精确匹配 |
 | LLM | OpenAI 兼容协议（DeepSeek-V3 / SiliconFlow 默认） | 绑定单一供应商 | 兼容协议可随时切换供应商，配合运行时配置热切换 |
 | 后端 | FastAPI + Uvicorn | Flask / Django | 原生 async（SSE 必需）、Pydantic 校验、自动 Swagger |
-| 向量库 | Chroma | Milvus / pgvector | 轻量本地持久化，适合单机部署；Docker 服务化（8001） |
+| 向量库 | Chroma | Milvus / pgvector | 轻量本地持久化，适合单机部署；Docker 服务化（容器内 8000） |
 | 联网检索 | Tavily MCP | 直接 HTTP 调 Tavily / SearxNG | MCP 标准化协议，同一工具可被外部 Agent 复用 |
 | 地图 | 高德 Web API + JS API | 百度 / 腾讯地图 | 国内 POI 数据与路径规划质量最优 |
 | 前端 | Vue3 + Vite + Element Plus + Pinia | React | 组合成熟、组件库覆盖表单 / 对话 / 地图场景 |
@@ -145,7 +145,7 @@ flowchart TB
     end
 
     subgraph Backend["FastAPI 后端 (:8000)"]
-        API["API 层 routers<br/>auth / chat / config / maps / plan / flight / poi / wishlist / crawl"]
+        API["API 层 routers<br/>auth / chat / config / crawl / flight / legacy_user / maps / wishlist"]
         SVC["服务层<br/>langgraph_chat（流式 / 恢复 / 历史）"]
         subgraph Graph["LangGraph 编排"]
             ENTRY["入口节点<br/>意图识别 + 确定性预检索"]
@@ -177,7 +177,7 @@ flowchart TB
     subgraph Storage["存储"]
         RDB[("SQLAlchemy<br/>SQLite / PostgreSQL<br/>users·itineraries·flight_bookings<br/>travel_wishlist·pois·reviews·hotels·restaurants")]
         DEMO[("travel_new.sqlite<br/>demo 航班班次库")]
-        CHROMA[("Chroma (:8001)<br/>RAG 向量库")]
+        CHROMA[("Chroma (:8000)<br/>RAG 向量库")]
         ENV[(".env / 运行时配置")]
     end
 
@@ -243,7 +243,7 @@ flowchart TB
 | 智能对话页 | `/chat` | 对话主界面：消息流（SSE 渲染）+ 结构化卡片（航班卡片带"加入我的航班"、评价卡片带 title/url 来源、酒店/POI 卡片）+ HITL 确认框 + 会话历史侧栏 |
 | 航班页 | `/flights` | 班次查询 + "我的航班"（按用户隔离的 `flight_bookings`，区分 booked / cancelled） |
 | 旅行清单页 | `/travel-list` | 清单列表（名称 / 城市 / 地址 / 备注 / 来源标签），支持手动添加、删除 |
-| 个人配置页 | `/profile` | 用户信息展示 + 「服务配置」区：LLM Key/BaseURL/模型/Temperature、高德 Key、Tavily Key；保存即写服务端热生效 |
+| 个人配置页 | `/profile` | 用户信息展示 + 「服务配置」区（仅管理员可见）：LLM Key/BaseURL/模型/Temperature、高德 Key、Tavily Key；保存即写服务端热生效；普通用户仅显示"服务配置仅管理员可修改"提示 |
 
 页面流转：`/` → (有 token) → `/route-planner`；(无 token) → `/login`。全部业务页受 `requiresAuth` 守卫。
 
@@ -264,11 +264,11 @@ flowchart TB
 | `/api/chat/pending` | GET | 查询会话中断态 | FR-B6 |
 | `/api/chat/history/{session_id}` | GET | 会话历史恢复 | FR-B6 |
 | `/api/travel/plan`（已移除） | POST | 行程规划改由对话式 Agent（`/api/chat/stream`）提供；该独立 REST 接口已随第二套规划实现移除 | FR-C1 |
-| `/api/maps/search` | GET | POI 搜索 | FR-D1 |
+| `/api/maps/poi` | GET | POI 搜索 | FR-D1 |
 | `/api/maps/route` | POST | 路线规划 | FR-D2 |
 | `/api/flight/*` | — | 航班查询 / 我的航班 | FR-E1/E3 |
 | `/api/wishlist/*` | — | 清单增删查 | FR-H1 |
-| `/api/config/runtime` | GET/POST | 运行时配置 | FR-I1/I2 |
+| `/api/config/runtime` | GET/POST | 运行时配置（仅管理员） | FR-I1/I2 |
 | `/api/crawl` | POST | 数据同步（预留） | FR-J3 |
 | `/health` | GET | 健康检查 | FR-J1 |
 
@@ -276,7 +276,7 @@ flowchart TB
 
 | 依赖 | 用途 | 失效降级 |
 | --- | --- | --- |
-| OpenAI 兼容 LLM | 推理核心 | **硬依赖**，未配置则核心功能不可用（配置页 / .env 均可填） |
+| OpenAI 兼容 LLM | 推理核心 | **硬依赖**，未配置则核心功能不可用（`.env` 或管理员配置页均可填） |
 | 高德 Web API | POI / 路线 | 工具报错，Agent 提示用户 |
 | 高德 JS API | 前端地图渲染 | 地图页降级为列表 |
 | Tavily MCP | 联网检索 | 回退本地缓存，未命中则告知无实时数据 |
@@ -422,13 +422,13 @@ erDiagram
 
 | 维度 | 现状 | 扩展路径 | 评估 |
 | --- | --- | --- | --- |
-| LLM 供应商 | OpenAI 兼容协议 + 运行时配置 | 换 Key / BaseURL 即切换，前端热生效 | ★★★★★ |
+| LLM 供应商 | OpenAI 兼容协议 + 运行时配置 | 换 Key / BaseURL 即切换，管理员前端热生效 | ★★★★★ |
 | Agent 能力 | 子图经 `build_child_graph` 组装，工具经 `bind_tools` 动态绑定 | 新增领域（如火车票、签证）= 新增子图 + 工具文件，不改主链路 | ★★★★☆ |
 | 工具协议 | 路线规划 / 网页搜索已 MCP 化 | 新工具以 MCP Server 暴露即可被 Claude Desktop / Cursor 复用 | ★★★★☆ |
 | 数据库 | SQLAlchemy ORM 屏蔽方言 | SQLite → PostgreSQL 仅改 `DATABASE_URL` | ★★★★☆ |
 | 知识库 | Chroma 集合按类别组织，支持增量补充 | 按目的地扩展集合；`/api/crawl` 预留自动同步入口 | ★★★☆☆ |
 | 水平扩展 | 会话态依赖 Checkpointer（本地） | 需将会话存储迁至 Redis / PostgreSQL；SSE 需粘性会话或网关 | ★★☆☆☆（单机当前够用） |
-| 多租户 | 无角色 / 组织模型 | 需加角色表与数据权限层，改动面较大 | ★★☆☆☆（明确范围外） |
+| 多租户 | 无完整角色/组织模型（仅 `ADMIN_USERNAMES` 轻量管理员判定） | 需加角色表与数据权限层，改动面较大 | ★★☆☆☆（明确范围外） |
 
 **结论**：能力扩展性（Agent / 工具 / 供应商）强，符合项目"Agent 工程范式演示"定位；规模化扩展（多机 / 多租户）非当前目标，已列入范围外。
 
@@ -447,7 +447,7 @@ erDiagram
 ### 12.2 可用性
 | 指标 | 目标 | 现状依据 |
 | --- | --- | --- |
-| 部署可用性 | 一键起三服务 | Docker Compose：后端 8000 / 前端 3000 / Chroma 8001 |
+| 部署可用性 | 一键起三服务 | Docker Compose：前端 3000 为对外入口；后端 8000 / Chroma 8000 / MCP 8001 仅容器内网（`expose`） |
 | 健康检查 | `GET /health` | 已实现 |
 | 会话可恢复 | 刷新不丢对话 | Checkpointer 持久化 + `/chat/history` + `/chat/pending` 恢复中断态 |
 | 优雅降级 | 单一外部依赖失效不整体不可用 | Tavily 失效→本地缓存；高德失效→Agent 提示；LLM 为硬依赖不可降级 |
@@ -460,11 +460,11 @@ erDiagram
 - JWT access + refresh 双令牌，refresh 可静默续期；
 - 服务端解析 `user_id`，忽略前端身份字段，防水平越权；
 - 敏感写操作 HITL 强制确认；软取消保留审计痕迹（`booking_no`）；
-- Key 服务端持久化（`.env` / 运行时配置），前端仅在配置页管理。
+- Key 服务端持久化（`.env` / 运行时配置），前端仅在配置页（仅管理员）管理；普通用户无法查看或覆盖全局 Key。
 
 ### 12.4 可维护性 / 可测试性
 - 分层清晰：api / services / graph / tools / models / schemas；
-- `pytest -q tests`（tests/、tests2/）覆盖核心链路；
+- `pytest -q tests`（tests/）覆盖核心链路；
 - Swagger `/docs` 自动生成接口文档。
 
 ## 13. 风险

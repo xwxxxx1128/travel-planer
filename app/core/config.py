@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
     # 刷新令牌有效期：默认 7 天，仅用于静默续期访问令牌
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
+    # 管理员用户名名单（逗号分隔），用于「服务配置」接口的读写权限。
+    # 留空 = 无管理员，配置接口对所有人返回 403（公网部署的安全默认）。
+    ADMIN_USERNAMES: str = ''
 
     DATABASE_URL: str = Field(default=f'sqlite:///{BASE_DIR / "system.db"}')
     CHROMA_PERSIST_DIR: str = Field(default=str(BASE_DIR / 'chroma_db'))
@@ -48,4 +51,9 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+
+
+def get_admin_usernames() -> set[str]:
+    """解析 ADMIN_USERNAMES 为去重后的用户名集合（忽略空白）。"""
+    return {name.strip() for name in settings.ADMIN_USERNAMES.split(',') if name.strip()}
 #Settings：环境变量、数据库/Chroma 路径、模型 Key
