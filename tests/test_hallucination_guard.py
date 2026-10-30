@@ -35,7 +35,7 @@ def _ai_tool(name):
 
 
 def _should_nudge_review(messages):
-    """复刻 CtripAssistant 中评价类「强制检索」的触发条件。"""
+    """复刻 tripAssistant 中评价类「强制检索」的触发条件。"""
     return (
         _is_review_query(messages)
         and not _called_search_reviews(messages)
@@ -44,7 +44,7 @@ def _should_nudge_review(messages):
 
 
 def _should_nudge_flight(messages):
-    """复刻 CtripAssistant 中航班类「强制检索」的触发条件。"""
+    """复刻 tripAssistant 中航班类「强制检索」的触发条件。"""
     return (
         _is_flight_query(messages)
         and not _called_any_flight_tool(messages)

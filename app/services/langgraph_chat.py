@@ -45,7 +45,7 @@ from app.services.flight_intent import (
     to_card_flights,
 )
 from graph_chat.assistant import (
-    CtripAssistant,
+    tripAssistant,
     assistant_runnable,
     primary_assistant_tools,
 )
@@ -206,7 +206,7 @@ def _build_graph():
     builder = builder_hotel_graph(builder)
     builder = builder_travel_list_graph(builder)
 
-    builder.add_node("primary_assistant", CtripAssistant(assistant_runnable))
+    builder.add_node("primary_assistant", tripAssistant(assistant_runnable))
     builder.add_node(
         "primary_assistant_tools",
         create_tool_node_with_fallback(primary_assistant_tools),

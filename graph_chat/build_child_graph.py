@@ -8,7 +8,7 @@ from langgraph.prebuilt import tools_condition
 from graph_chat.agent_assistant import update_flight_runnable, update_flight_sensitive_tools, update_flight_safe_tools, \
     book_hotel_runnable, \
     book_hotel_safe_tools, book_hotel_sensitive_tools, travel_list_runnable, travel_list_tools
-from graph_chat.assistant import CtripAssistant
+from graph_chat.assistant import tripAssistant
 from graph_chat.base_data_model import CompleteOrEscalate
 from graph_chat.entry_node import create_entry_node
 from tools.tools_handler import create_tool_node_with_fallback
@@ -41,7 +41,7 @@ def build_flight_graph(builder: StateGraph) -> StateGraph:
         "enter_update_flight",
         create_entry_node("Flight Updates & Booking Assistant", "update_flight"),  # 创建入口节点，指定助理名称和新对话状态
     )
-    builder.add_node("update_flight", CtripAssistant(update_flight_runnable))  # 添加处理航班更新的实际节点
+    builder.add_node("update_flight", tripAssistant(update_flight_runnable))  # 添加处理航班更新的实际节点
     builder.add_edge("enter_update_flight", "update_flight")  # 入口 → 航班处理节点
 
     # 添加敏感工具和安全工具的节点
@@ -129,12 +129,12 @@ def builder_hotel_graph(builder: StateGraph) -> StateGraph:
         "enter_book_hotel",
         create_entry_node("酒店预订助理", "book_hotel"),  # 创建入口节点，指定助理名称和新对话状态
     )
-    builder.add_node("book_hotel", CtripAssistant(book_hotel_runnable))  # 添加处理酒店预订的实际节点
+    builder.add_node("book_hotel", (book_hotel_runnable))  # 添加处理酒店预订的实际节点
     builder.add_edge("enter_book_hotel", "book_hotel")  # 连接入口节点到实际处理节点
 
     # 添加安全工具和敏感工具的节点
     builder.add_node(
-        "book_hotel_safe_tools",
+        "book_hotel_safe_tools",tripAssistant
         create_tool_node_with_fallback(book_hotel_safe_tools),  # 安全工具节点，通常只读查询
     )
     builder.add_node(
@@ -198,7 +198,7 @@ def builder_travel_list_graph(builder: StateGraph) -> StateGraph:
         "enter_travel_list",
         create_entry_node("旅行清单助理", "travel_list"),  # 创建入口节点，指定助理名称和新对话状态
     )
-    builder.add_node("travel_list", CtripAssistant(travel_list_runnable))  # 处理景点推荐与清单管理的实际节点
+    builder.add_node("travel_list", tripAssistant(travel_list_runnable))  # 处理景点推荐与清单管理的实际节点
     builder.add_edge("enter_travel_list", "travel_list")  # 连接入口节点到实际处理节点
 
     builder.add_node(

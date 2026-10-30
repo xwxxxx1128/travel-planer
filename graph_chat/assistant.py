@@ -147,7 +147,7 @@ _MESSAGE_TRIMMER = trim_messages(
 )
 
 
-class CtripAssistant:
+class tripAssistant:
     # 自定义一个类，表示流程图的一个节点（复杂的）
 
     def __init__(self, runnable: Runnable):
