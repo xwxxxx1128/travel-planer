@@ -156,6 +156,7 @@ def init_db() -> None:
     try:
         from app.models import (  # noqa: F401
             user,
+            user_config,
             itinerary,
             poi,
             hotel,

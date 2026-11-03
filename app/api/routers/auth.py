@@ -1,4 +1,5 @@
 ﻿from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -28,6 +29,11 @@ def _subject(user: User) -> str:
     return f'{user.id}:{user.username}'
 
 
+def _normalize_username(username: str) -> str:
+    """用户名归一化：去首尾空白并转小写，避免「Alice」与「alice 」这类边缘重复。"""
+    return (username or '').strip().lower()
+
+
 def _to_profile(user: User) -> UserProfile:
     profile = UserProfile.model_validate(user, from_attributes=True)
     profile.is_admin = user.username in get_admin_usernames()
@@ -36,11 +42,15 @@ def _to_profile(user: User) -> UserProfile:
 
 @router.post('/register', response_model=UserProfile)
 def register(payload: RegisterRequest, session: Session = Depends(get_session)):
-    exists = session.query(User).filter(User.username == payload.username).first()
+    username = _normalize_username(payload.username)
+    if not username:
+        raise HTTPException(status_code=400, detail='用户名不能为空')
+    # 大小写不敏感查重，避免「Alice」与「alice」注册为两个账号
+    exists = session.query(User).filter(func.lower(User.username) == username).first()
     if exists:
         raise HTTPException(status_code=409, detail='用户名已存在')
     user = User(
-        username=payload.username,
+        username=username,
         password_hash=hash_password(payload.password),
         phone=payload.phone,
         email=payload.email,
@@ -54,7 +64,9 @@ def register(payload: RegisterRequest, session: Session = Depends(get_session)):
 
 @router.post('/login', response_model=TokenResponse)
 def login(payload: LoginRequest, session: Session = Depends(get_session)):
-    user = session.query(User).filter(User.username == payload.username).first()
+    username = _normalize_username(payload.username)
+    # 大小写不敏感匹配，兼容历史数据里可能存在的非小写用户名
+    user = session.query(User).filter(func.lower(User.username) == username).first()
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail='用户名或密码错误')
     return TokenResponse(

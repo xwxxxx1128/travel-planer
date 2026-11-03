@@ -1,4 +1,5 @@
 ﻿from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.session import get_session
@@ -11,6 +12,11 @@ router = APIRouter()
 
 def _to_profile(user: User) -> UserProfile:
     return UserProfile.model_validate(user, from_attributes=True)
+
+
+def _normalize_username(username: str) -> str:
+    """用户名归一化：去首尾空白并转小写，避免「Alice」与「alice 」这类边缘重复。"""
+    return (username or '').strip().lower()
 
 
 @router.get('/users/getUsers/', response_model=list[UserProfile])
@@ -28,8 +34,11 @@ def get_by_id(pk: int, session: Session = Depends(get_session)):
 
 @router.post('/register/', response_model=UserProfile)
 def register(obj_in: RegisterRequest, session: Session = Depends(get_session)):
-    obj_in.username = obj_in.username.strip()
-    if session.query(User).filter(User.username == obj_in.username).first():
+    obj_in.username = _normalize_username(obj_in.username)
+    if not obj_in.username:
+        raise HTTPException(status_code=400, detail='用户名不能为空')
+    # 大小写不敏感查重，避免「Alice」与「alice」注册为两个账号
+    if session.query(User).filter(func.lower(User.username) == obj_in.username).first():
         raise HTTPException(status_code=409, detail=f'用户名{obj_in.username} 已存在')
     user = User(
         username=obj_in.username,
@@ -46,7 +55,9 @@ def register(obj_in: RegisterRequest, session: Session = Depends(get_session)):
 
 @router.post('/login/')
 def login(obj_in: LoginRequest, session: Session = Depends(get_session)):
-    user = session.query(User).filter(User.username == obj_in.username).first()
+    username = _normalize_username(obj_in.username)
+    # 大小写不敏感匹配，兼容历史数据里可能存在的非小写用户名
+    user = session.query(User).filter(func.lower(User.username) == username).first()
     if not user or not verify_password(obj_in.password, user.password_hash):
         raise HTTPException(status_code=401, detail='登录失败')
     return {

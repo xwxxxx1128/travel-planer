@@ -10,7 +10,7 @@
 2) 去掉标点与空白；
 3) 查别名表（精确 → 包含），命中则替换为规范名。
 
-别名表可在内置字典基础上，通过 config/poi_aliases.json 覆盖/扩展（可选）。
+别名表可在内置字典基础上，通过 tools/poi_aliases.json 覆盖/扩展（可选）。
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ _BUILTIN_ALIASES: Dict[str, str] = {
     "慕田峪": "慕田峪长城",
 }
 
-_ALIAS_FILE = Path(__file__).resolve().parents[1] / "config" / "poi_aliases.json"
+_ALIAS_FILE = Path(__file__).resolve().parent / "poi_aliases.json"
 
 # 需要剥离的“意图词/修饰词”（按长度倒序替换，避免子串残留）
 _NOISE_WORDS = [

@@ -13,7 +13,7 @@ import json
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from graph_chat.assistant import (
+from app.graph_chat.assistant import (
     _is_review_query,
     _called_search_reviews,
     _has_prefetched_review_ctx,

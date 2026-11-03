@@ -58,12 +58,15 @@ class TavilyMcpClient:
         # results: [{"title": ..., "url": ..., "content": ...}, ...]
     """
 
-    def __init__(self) -> None:
+    def __init__(self, api_key: str = "", mcp_command: str = "") -> None:
         self._stack = AsyncExitStack()
         self._session: Optional[ClientSession] = None
         # 缓存已发现的搜索工具名（不同 MCP Server 版本命名可能不同）。
         self._tool_name: Optional[str] = None
         self._ready = False
+        # BYOK：允许按用户传入 Tavily Key / 启动命令，缺省回退到 .env。
+        self._api_key = api_key
+        self._mcp_command = mcp_command
 
     async def __aenter__(self) -> "TavilyMcpClient":
         await self.connect()
@@ -76,17 +79,18 @@ class TavilyMcpClient:
         """建立与 Tavily MCP Server 的会话连接（stdio 子进程模式）。"""
         if self._ready:
             return
-        if not os.getenv("TAVILY_API_KEY"):
+        api_key = self._api_key or os.getenv("TAVILY_API_KEY", "")
+        if not api_key:
             raise RuntimeError("未配置 TAVILY_API_KEY，无法连接 Tavily MCP Server")
 
         # 解析启动命令（支持带参数的字符串，如 "npx -y tavily-mcp"）。
-        parts = _default_mcp_command().split()
+        parts = (self._mcp_command or _default_mcp_command()).split()
         command, args = parts[0], parts[1:]
         params = StdioServerParameters(
             command=command,
             args=args,
             # 透传 TAVILY_API_KEY，供子进程内的 Tavily MCP Server 鉴权。
-            env={**os.environ, "TAVILY_API_KEY": os.getenv("TAVILY_API_KEY", "")},
+            env={**os.environ, "TAVILY_API_KEY": api_key},
         )
         read, write = await self._stack.enter_async_context(stdio_client(params))
         self._session = await self._stack.enter_async_context(ClientSession(read, write))

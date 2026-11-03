@@ -21,6 +21,7 @@ import re
 from typing import Optional
 
 from app.services.city_names import CITIES
+from app.services.user_config import resolve_user_config
 from tools.reviews_tools import fetch_tavily_reviews_sync
 
 logger = logging.getLogger(__name__)
@@ -141,13 +142,19 @@ def _format_no_material(poi: str) -> str:
     )
 
 
-def build_material_context(poi: str, city: str = "") -> tuple[str, list[dict]]:
+def build_material_context(poi: str, city: str = "", user_id=None) -> tuple[str, list[dict]]:
     """现调检索（内部含“缓存优先”）并返回 (上下文, 结构化条目)。
 
     检索异常或无结果时，降级为“无材料”上下文（引导模型如实告知、不要编造）。
     """
     try:
-        items = fetch_tavily_reviews_sync(poi, city=city or "")
+        cfg = resolve_user_config(user_id)
+        items = fetch_tavily_reviews_sync(
+            poi,
+            city=city or "",
+            api_key=cfg.get("tavily_api_key", ""),
+            mcp_command=cfg.get("tavily_mcp_command", ""),
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("评价预检索失败（%s / %s）：%s", poi, city or "-", exc)
         items = []

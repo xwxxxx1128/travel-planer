@@ -19,8 +19,10 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
+from app.services.user_config import resolve_user_config
 from tools.mcp_tavily_client import TavilyMcpClient
 from tools.poi_normalize import cache_key
 
@@ -133,6 +135,8 @@ async def fetch_tavily_reviews(
     max_results: int | None = None,
     time_range: str | None = None,
     force_refresh: bool = False,
+    api_key: str = "",
+    mcp_command: str = "",
 ) -> list[dict]:
     """抓取某景点的互联网公开评价/攻略材料（Tavily 网页搜索）。
 
@@ -160,7 +164,7 @@ async def fetch_tavily_reviews(
 
     query = f"{poi_name} 游客真实评价 游玩攻略 游记 推荐"
     try:
-        async with TavilyMcpClient() as client:
+        async with TavilyMcpClient(api_key=api_key, mcp_command=mcp_command) as client:
             items = await client.search(
                 query,
                 max_results=resolved_max,
@@ -196,15 +200,23 @@ def fetch_tavily_reviews_sync(
     max_results: int | None = None,
     time_range: str | None = None,
     force_refresh: bool = False,
+    api_key: str = "",
+    mcp_command: str = "",
 ) -> list[dict]:
     """同步封装：供 ReviewRAGAgent / 同步路由调用。"""
     return _run_async(
-        fetch_tavily_reviews(poi_name, city, max_results, time_range, force_refresh)
+        fetch_tavily_reviews(poi_name, city, max_results, time_range, force_refresh, api_key, mcp_command)
     )
 
 
+def _user_id_from_config(config: RunnableConfig | None) -> int | None:
+    if not config:
+        return None
+    return (config.get("configurable") or {}).get("user_id")
+
+
 @tool
-async def search_reviews(poi_name: str) -> str:
+async def search_reviews(poi_name: str, config: RunnableConfig = None) -> str:
     """查询指定景点的游客评价/攻略素材。
 
     通过 Tavily 网页搜索获取该景点相关的互联网公开游记、攻略与点评材料
@@ -212,7 +224,12 @@ async def search_reviews(poi_name: str) -> str:
     并附上原始来源链接；严禁编造内容。材料有限时如实说明，未命中时如实告知。
     """
     logger.info("search_reviews 被调用 poi_name=%s", poi_name)
-    items = await fetch_tavily_reviews(poi_name)
+    cfg = resolve_user_config(_user_id_from_config(config))
+    items = await fetch_tavily_reviews(
+        poi_name,
+        api_key=cfg.get("tavily_api_key", ""),
+        mcp_command=cfg.get("tavily_mcp_command", ""),
+    )
     if not items:
         return f"未检索到「{poi_name}」的相关网络评价材料，暂无法提供游客评价。"
 

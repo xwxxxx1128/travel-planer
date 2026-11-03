@@ -1,9 +1,10 @@
 import httpx
 from typing import Dict
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from dotenv import load_dotenv
 
-from app.core.runtime_config import get_runtime_config
+from app.services.user_config import resolve_user_config
 
 load_dotenv()
 
@@ -13,15 +14,21 @@ AMAP_GEO_URL = "https://restapi.amap.com/v3/geocode/geo"
 _adcode_cache: Dict[str, str] = {}
 
 
-def get_amap_key() -> str:
-    """从运行时配置读取高德 Web API Key。"""
+def _user_id_from_config(config: RunnableConfig | None) -> int | None:
+    if not config:
+        return None
+    return (config.get("configurable") or {}).get("user_id")
+
+
+def get_amap_key(user_id=None) -> str:
+    """按用户读取高德 Web API Key（未填写回退 .env）。"""
     try:
-        return get_runtime_config().amap_web_key or ""
+        return resolve_user_config(user_id).get("amap_web_key", "") or ""
     except Exception:
         return ""
 
 
-def _resolve_adcode(location: str) -> str:
+def _resolve_adcode(location: str, user_id=None) -> str:
     """把城市名/地址解析为 adcode（高德天气接口需要 adcode）。"""
     if not location:
         return ""
@@ -29,7 +36,7 @@ def _resolve_adcode(location: str) -> str:
         return location
     if location in _adcode_cache:
         return _adcode_cache[location]
-    key = get_amap_key()
+    key = get_amap_key(user_id)
     adcode = ""
     if key:
         try:
@@ -49,17 +56,18 @@ def _resolve_adcode(location: str) -> str:
 
 
 @tool(description="获取天气信息工具，根据位置获取当前实时天气（高德地图天气）")
-def amap_get_weather(location: str) -> str:
+def amap_get_weather(location: str, config: RunnableConfig = None) -> str:
     """
     根据位置（城市名或经纬度）获取实时天气。\n
     返回包含天气现象、温度、风向、风力、湿度的字符串。\n
     参数:\n
     - location: 城市名（如“北京”）或 "经度,纬度"\n
     """
-    key = get_amap_key()
+    user_id = _user_id_from_config(config)
+    key = get_amap_key(user_id)
     if not key:
         return "错误：未配置高德地图 Web API Key，无法获取天气。"
-    city = _resolve_adcode(location)
+    city = _resolve_adcode(location, user_id)
     if not city:
         return f"错误：无法解析城市或坐标 '{location}'，请提供更明确的城市名称。"
     try:
@@ -87,7 +95,7 @@ def amap_get_weather(location: str) -> str:
 
 
 @tool(description="获取未来天气预报工具，根据位置获取未来几天的天气预报（高德地图天气）")
-def amap_get_forecast(location: str, days: int = 3) -> str:
+def amap_get_forecast(location: str, days: int = 3, config: RunnableConfig = None) -> str:
     """
     根据位置（城市名或经纬度）获取未来天气预报。\n
     返回未来若干天的白天/夜间天气与高低温。\n
@@ -95,10 +103,11 @@ def amap_get_forecast(location: str, days: int = 3) -> str:
     - location: 城市名（如“北京”）或 "经度,纬度"\n
     - days: 预报天数，默认 3，最多 7\n
     """
-    key = get_amap_key()
+    user_id = _user_id_from_config(config)
+    key = get_amap_key(user_id)
     if not key:
         return "错误：未配置高德地图 Web API Key，无法获取天气预报。"
-    city = _resolve_adcode(location)
+    city = _resolve_adcode(location, user_id)
     if not city:
         return f"错误：无法解析城市或坐标 '{location}'，请提供更明确的城市名称。"
     days = max(1, min(int(days or 3), 7))

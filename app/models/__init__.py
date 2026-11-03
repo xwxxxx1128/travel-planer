@@ -1,4 +1,5 @@
 ﻿from app.models.user import User
+from app.models.user_config import UserConfig
 from app.models.itinerary import Itinerary, ItineraryDay, ItineraryItem
 from app.models.poi import POI
 from app.models.hotel import Hotel

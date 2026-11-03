@@ -30,17 +30,17 @@
 
 ## 1. 项目亮点（适合 AI 应用 / Agent 开发岗位）
 
-| 亮点 | 说明 |
-| --- | --- |
-| **多 Agent 协作编排** | 基于 LangGraph 构建主助理 + 航班预订、酒店预订、旅行清单子图，支持工具调用、状态共享与子 Agent 委托。 |
-| **ReAct + Tool Calling** | 主助理通过 `bind_tools` 动态调用搜索、地图、航班、酒店、评价等工具，实现“思考 → 行动 → 观察”闭环。 |
-| **实时联网检索（Tavily）** | 景点评价/攻略通过 Tavily MCP 实时联网检索，命中评价意图时确定性预检索，避免大模型凭记忆编造。 |
-| **RAG 向量检索** | 政策 FAQ 基于 OpenAI Embeddings + Chroma 向量库检索；POI/评论类知识通过 Chroma 集合增量补充。 |
-| **MCP 协议扩展** | 路线规划、网页搜索等能力以 MCP Server 形态暴露，可被 Claude Desktop / Cursor / 自研 Agent 复用。 |
-| **Human-in-the-Loop** | 航班预订/取消等敏感操作触发中断，前端二次确认后继续执行，确保关键写操作可控。 |
-| **流式交互体验** | 对话采用 SSE 节点级流式输出，首字秒级出现；地图页支持实时路线规划与可视化。 |
-| **运行时配置中心** | 大模型 Key / 模型名 / Temperature、高德 Key、Tavily Key 等均可在前端「个人信息 / 服务配置」页维护（仅管理员），持久化到服务端，无需每次登录重填。 |
-| **全栈工程化** | FastAPI + SQLAlchemy + Vue3 + Vite + Element Plus + Pinia，支持 Docker Compose 一键部署。 |
+| 亮点                             | 说明                                                                                                                                                                               |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **多 Agent 协作编排**      | 基于 LangGraph 构建主助理 + 航班预订、酒店预订、旅行清单子图，支持工具调用、状态共享与子 Agent 委托。                                                                              |
+| **ReAct + Tool Calling**   | 主助理通过 `bind_tools` 动态调用搜索、地图、航班、酒店、评价等工具，实现“思考 → 行动 → 观察”闭环。                                                                           |
+| **实时联网检索（Tavily）** | 景点评价/攻略通过 Tavily MCP 实时联网检索，命中评价意图时确定性预检索，避免大模型凭记忆编造。                                                                                      |
+| **RAG 向量检索**           | 政策 FAQ 基于 OpenAI Embeddings + Chroma 向量库检索；POI/评论类知识通过 Chroma 集合增量补充。                                                                                      |
+| **MCP 协议扩展**           | 路线规划、网页搜索等能力以 MCP Server 形态暴露，可被 Claude Desktop / Cursor / 自研 Agent 复用。                                                                                   |
+| **Human-in-the-Loop**      | 航班预订/取消等敏感操作触发中断，前端二次确认后继续执行，确保关键写操作可控。                                                                                                      |
+| **流式交互体验**           | 对话采用 SSE 节点级流式输出，首字秒级出现；地图页支持实时路线规划与可视化。                                                                                                        |
+| **运行时配置中心（BYOK）** | 每个登录用户拥有独立一套大模型 Key / 模型名 / Temperature、高德 Key、Tavily Key，可在前端「个人信息 / 服务配置」页填写并持久化；未填写项自动沿用服务器 `.env` 默认值，开箱即用。 |
+| **全栈工程化**             | FastAPI + SQLAlchemy + Vue3 + Vite + Element Plus + Pinia，支持 Docker Compose 一键部署。                                                                                          |
 
 ---
 
@@ -51,23 +51,23 @@
 - **航班数据查询与操作**：内置航班/机场本地数据库，支持查询、改签、取消等操作（敏感操作需人工确认）。
 - **地图与路线规划**：集成高德地图 API，提供地理编码、路径规划、TSP 多目的地优化与可视化展示。
 - **景点攻略 / 评价检索**：基于 Tavily 联网搜索 + 本地 30 天缓存，支持“数据库优先、未命中再联网”的评价查询。
-- **对话式交互前端**：Vue3 单页应用，支持历史记录持久化、流式输出、敏感操作二次确认。
+- **对话式交互前端**：Vue3 单页应用，支持历史记录持久化（按用户隔离）、流式输出、敏感操作二次确认。
 - **可观测性**：统一日志、健康检查、结构化运行期配置管理。
 
 ---
 
 ## 3. 技术栈
 
-| 层 | 技术 |
-| --- | --- |
-| 后端框架 | FastAPI + Uvicorn |
-| Agent 编排 | LangGraph / LangChain / LangChain-OpenAI |
-| 向量检索 | Chroma + OpenAI Embeddings |
-| 网页搜索 | Tavily MCP |
-| 地图服务 | 高德地图 Web API / JS API |
-| 前端 | Vue 3 + Vite + Element Plus + Pinia + Vue Router |
-| 数据持久化 | SQLAlchemy（SQLite / PostgreSQL） |
-| 部署 | Docker / Docker Compose |
+| 层         | 技术                                             |
+| ---------- | ------------------------------------------------ |
+| 后端框架   | FastAPI + Uvicorn                                |
+| Agent 编排 | LangGraph / LangChain / LangChain-OpenAI         |
+| 向量检索   | Chroma + OpenAI Embeddings                       |
+| 网页搜索   | Tavily MCP                                       |
+| 地图服务   | 高德地图 Web API / JS API                        |
+| 前端       | Vue 3 + Vite + Element Plus + Pinia + Vue Router |
+| 数据持久化 | SQLAlchemy（SQLite / PostgreSQL）                |
+| 部署       | Docker / Docker Compose                          |
 
 ---
 
@@ -75,31 +75,37 @@
 
 ```text
 trip_assistant_L/
-├─ app/                      # 后端主工程
+├─ app/                      # 后端主工程（FastAPI）
 │  ├─ api/                   # 接口层（routers 与各路由实现）
-│  ├─ core/                  # 配置（config / runtime_config）
+│  ├─ core/                  # 配置（config / runtime_config / logging）
 │  ├─ db/                    # 数据库连接与初始化
-│  ├─ graph_chat/             # LangGraph 编排：入口/主助理/子图/状态（真正的编排实现）
+│  ├─ graph_chat/            # LangGraph 编排：入口/主助理/子图/状态
 │  ├─ models/                # ORM 模型
 │  ├─ schemas/               # Pydantic 请求/响应模型
-│  ├─ services/              # 业务服务（聊天、调度、知识库）
-│  └─ tools/                 # 图状态等辅助
-├─ graph_chat/               # LangGraph 子图 / Agent 定义
+│  ├─ services/              # 业务服务（聊天、每用户配置、调度、知识库）
+│  └─ tools/                 # 鉴权工具（auth_tool）
 ├─ tools/                    # 外部工具封装
 │  ├─ amap_tools.py          # 高德地图
 │  ├─ flights_tools.py       # 航班查询
+│  ├─ flight_bookings_tools.py # 我的航班（写操作）
 │  ├─ hotels_tools.py        # 酒店推荐
 │  ├─ reviews_tools.py       # 评论检索（含本地缓存）
 │  ├─ route_planner.py       # 路线规划
 │  ├─ weather_tools.py       # 天气查询
+│  ├─ poi_normalize.py       # 景点名归一化（含 poi_aliases.json）
 │  ├─ mcp_tavily_client.py   # Tavily MCP 客户端
 │  ├─ mcp_route_server.py    # 路线规划 MCP Server
 │  └─ retriever_vector.py    # 向量检索
 ├─ frontend/                 # Vue3 + Vite + Element Plus 前端
 ├─ tests/                    # pytest 测试
-├─ main.py                   # 后端启动入口
+├─ 全程/                     # 需求文档（PRD / 需求清单）
+├─ main.py                   # 后端启动入口（自动构建前端 + 起服务）
+├─ run.ps1                   # Windows 一键启动脚本
 ├─ docker-compose.yml        # 容器编排
+├─ Dockerfile                # 后端镜像
 ├─ requirements.txt          # Python 依赖
+├─ langgraph.json            # LangGraph 配置
+├─ order_faq.md              # 政策 FAQ（RAG 知识源）
 └─ .env.example              # 环境变量模板
 ```
 
@@ -117,10 +123,10 @@ trip_assistant_L/
 
 ### 6.1 配置服务密钥
 
-项目支持两种配置方式（优先级：前端运行时配置 > 根目录 `.env`）：
+项目支持两种配置方式（优先级：用户自填配置 > 根目录 `.env`）：
 
-1. **前端「服务配置」页（仅管理员）**：启动后访问 `http://127.0.0.1:8000/ui`，用管理员账号登录后进入「个人信息 / 服务配置」页填写并保存。管理员由 `.env` 的 `ADMIN_USERNAMES` 指定（见 §8）。
-2. **`.env` 文件（任何部署方式通用）**：复制 `.env.example` 为 `.env` 并填入密钥：
+1. **前端「服务配置」页（每个用户独立）**：启动后访问 `http://127.0.0.1:8000/ui`，用任意账号登录后进入「个人信息 / 服务配置」页，填写**自己专属**的大模型 / 高德 / Tavily Key 并保存（BYOK）。配置按 `user_id` 隔离，未填写的字段自动沿用 `.env` 默认值。
+2. **`.env` 文件（部署方默认配置）**：复制 `.env.example` 为 `.env` 并填入部署方的默认密钥，供未自填的用户兜底使用：
 
 ```bash
 cp .env.example .env
@@ -178,7 +184,7 @@ docker compose up --build
 
 > 容器通过 `env_file: .env` 读取环境变量；数据库与向量库持久化目录已被 `.gitignore` 忽略。
 
-**公网部署（共享配置 + 管理员）**：`.env` 不随 Git 上传；部署时在服务器上手动创建 `.env` 并填入部署者的共享 Key，`docker compose` 会经 `env_file` 注入容器，所有访客共用这套 Key（费用归属部署者）。同时在 `.env` 设置 `ADMIN_USERNAMES=你的管理员用户名`，使只有管理员能在网页修改配置，普通注册用户无法查看或覆盖共享 Key。
+**公网部署（BYOK + 默认配置兜底）**：`.env` 不随 Git 上传；部署时在服务器上手动创建 `.env` 并填入部署方的**默认** Key，`docker compose` 会经 `env_file` 注入容器，作为未自填用户（以及政策 RAG、路线 MCP 等部署方能力）的兜底。每个注册用户可在前端「服务配置」页填写**自己**的 Key（按 `user_id` 隔离存储于 `user_configs` 表），费用各自归属；未填写的用户继续沿用部署方的默认 Key。
 
 ---
 
@@ -209,11 +215,11 @@ CHROMA_PERSIST_DIR=./chroma_db
 # JWT 密钥
 SECRET_KEY=随机字符串
 
-# 管理员（逗号分隔，仅这些账号可修改服务配置）
+# 管理员名单（逗号分隔，仅用于 /auth/me 返回 is_admin 标识，暂未绑定具体管理功能；服务配置已改为每用户独立，不再受此名单限制）
 ADMIN_USERNAMES=admin
 ```
 
-> 上述配置均可在前端「个人信息 / 服务配置」页维护（仅管理员），保存后写入 `.env` 并立即更新 `os.environ`，无需手动改文件。
+> 上述 `.env` 是部署方的**默认**配置。每个用户还可在前端「个人信息 / 服务配置」页填写自己的 Key（写入数据库 `user_configs` 表，按用户隔离），对话时优先使用用户自填值、未填写字段回退到这里的 `.env`。
 
 ---
 
@@ -245,11 +251,11 @@ ADMIN_USERNAMES=admin
 
 所有接口前缀为 `/api`：
 
-- `POST /api/auth/register`：注册
+- `POST /api/auth/register`：注册（用户名去空白并统一小写，重名返回 409）
 - `POST /api/auth/login`：登录
 - `GET /api/auth/me`：当前用户信息
-- `GET /api/config/runtime`：读取运行时配置（仅管理员）
-- `POST /api/config/runtime`：保存运行时配置（仅管理员）
+- `GET /api/config/runtime`：读取当前登录用户自己的运行时配置（未填写字段回退 `.env`）
+- `POST /api/config/runtime`：保存当前登录用户自己的运行时配置
 - `POST /api/chat/stream`：流式对话（含对话式行程规划等能力）
 - `GET /api/maps/poi`：POI 搜索
 - `POST /api/maps/route`：路线规划

@@ -2,13 +2,14 @@
 
 > 版本：v1.0 ｜ 状态：初稿
 > 需求来源：《需求清单.md》（FR 编号本文直接引用）
-> 本文所有内容均对照项目代码事实（`app/`、`graph_chat/`、`tools/`、`frontend/src/`）编写，标注【事实】的部分可在代码中直接验证。
+> 本文所有内容均对照项目代码事实（`app/`（含 `app/graph_chat/`）、`tools/`、`frontend/src/`）编写，标注【事实】的部分可在代码中直接验证。
 
 ## 修订记录
 
 | 版本 | 日期 | 变更说明 |
 | --- | --- | --- |
 | v1.0 | 2026-10-18 | 初稿：基于现有实现反推并规范化 |
+| v1.1 | 2026-11-03 | 服务配置改为每用户独立（BYOK，新增 `user_configs` 表）；会话历史按 `user_id` 命名空间隔离；注册用户名去空白+小写归一化 |
 
 ---
 
@@ -38,7 +39,7 @@
 | 角色 | 说明 |
 | --- | --- |
 | 游客 | 仅可访问登录 / 注册页 |
-| 注册用户 | 基础业务角色，全部业务功能（服务配置仅 `ADMIN_USERNAMES` 管理员可用）；数据按 `user_id` 隔离【事实：chat 接口服务端解析令牌取 `user_id`，忽略前端身份字段防越权】 |
+| 注册用户 | 基础业务角色，全部业务功能（服务配置为**每用户独立 BYOK**：自填自己的 Key，未填回退 `.env` 默认）；数据与配置均按 `user_id` 隔离【事实：chat 接口服务端解析令牌取 `user_id`，忽略前端身份字段防越权；配置存 `user_configs` 表】 |
 | 部署者 | 不进系统，通过 `.env` / Docker Compose 管理 |
 
 前端路由守卫：`requiresAuth` 页面先查本地 token，再调 `authApi.me()` 校验真实性；401 时 axios 拦截器用 refresh token 静默续期【事实：`frontend/src/router/index.js`】。
@@ -48,13 +49,13 @@
 按《需求清单.md》第 6 节的 FR 编号执行，此处给出开发视角的补充规则。
 
 ### 4.1 用户与认证（FR-A）
-- 注册：用户名唯一，冲突返回 409"用户名已存在"；密码经 `hash_password` 加密存储，不落明文【事实：`app/api/routers/auth.py`】
+- 注册：用户名唯一（去首尾空白并统一小写后比较，大小写不敏感），冲突返回 409"用户名已存在"；密码经 `hash_password` 加密存储，不落明文【事实：`app/api/routers/auth.py`】
 - 登录：返回 `access_token` + `refresh_token` + 用户信息；JWT `sub` 格式为 `{id}:{username}`
 - 续期：`POST /api/auth/refresh` 校验 refresh 令牌类型后换发新双令牌
 - 用户档案字段：username、password_hash、phone、email、real_name、preference、created_at
 
 ### 4.2 智能对话（FR-B）—— 系统核心
-对话链路【事实：`graph_chat/entry_node.py`、`app/services/langgraph_chat.py`、README 架构图】：
+对话链路【事实：`app/graph_chat/entry_node.py`、`app/services/langgraph_chat.py`、README 架构图】：
 
 ```text
 用户消息
@@ -74,7 +75,7 @@ SSE 流式输出（text/event-stream，X-Accel-Buffering: no）
 ```
 
 关键规则：
-- 会话以 `session_id` 经 Checkpointer 持久化，刷新页面后 `/chat/history/{session_id}` 恢复，`/chat/pending` 恢复未完成的确认框；
+- 会话以 `session_id` 经 Checkpointer 持久化，刷新页面后 `/chat/history/{session_id}` 恢复，`/chat/pending` 恢复未完成的确认框；会话定位（thread_id / 历史文件 / 审批台账）按 `user_id` 命名空间隔离（`{user_id}:{session_id}`），读取接口服务端解析令牌取 `user_id` 定位，杜绝跨用户读会话【事实：`app/services/langgraph_chat.py` 的 `_scoped_session_id`】；
 - 航班卡片"加入我的航班"与对话内预订共用同一确认机制：先挂起（不写库），确认后 resume 才写【事实：`chat_book_flight` 注释】。
 
 ### 4.3 行程规划（FR-C）
@@ -118,6 +119,7 @@ SSE 流式输出（text/event-stream，X-Accel-Buffering: no）
 | V-6 | 用户身份以服务端 JWT 为准 | 前端传入的任何 `user_id` 字段一律忽略，防止水平越权 |
 | V-7 | TSP 优化在地理顺序优化时须兼顾时间窗 | 纯距离最优可能违反营业时间 / 到达离开时间约束，需联合权衡 |
 | V-8 | SSE 必须关闭反代缓冲 | 否则 nginx 缓冲导致前端长时间零字节超时 |
+| V-9 | 会话必须按 `user_id` 命名空间隔离 | 会话定位（thread_id / 历史文件 / 审批台账）不得使用裸 `session_id`，需前缀 `user_id`；读取接口按令牌解析 `user_id` 定位，防止跨用户读历史 |
 
 ## 6. 架构方案与选型
 
@@ -211,10 +213,10 @@ flowchart TB
 | --- | --- | --- |
 | API 层 | `app/api/routers/` | 8 个路由：auth、chat、config、crawl、flight、legacy_user、maps、wishlist（graph、plan、poi 路由在清理第二套规划实现后已不存在） |
 | 鉴权依赖 | `app/api/deps.py` | `get_current_user`：解析 JWT，注入 user_id |
-| 配置 | `app/core/` | 静态 config + 运行时 runtime_config（热更新） |
+| 配置 | `app/core/`、`app/services/` | 静态 config + 运行时 runtime_config（`.env` 兜底）+ `user_config`（每用户 BYOK 配置，存 `user_configs` 表） |
 | 服务层 | `app/services/` | langgraph_chat（流式、resume、pending、history）、调度、知识库 |
-| 编排 | `graph_chat/` | 入口节点、主助理、子图构建、状态定义、LLM 配置、日志 |
-| 模型 | `app/models/` | 9 个 ORM 模型（见第 9 节 ER） |
+| 编排 | `app/graph_chat/` | 入口节点、主助理、子图构建、状态定义、LLM 配置、日志 |
+| 模型 | `app/models/` | 10 个 ORM 模型（见第 9 节 ER） |
 | 校验 | `app/schemas/` | Pydantic 请求 / 响应模型 |
 | 持久化 | `app/db/` | 会话管理与初始化 |
 
@@ -243,7 +245,7 @@ flowchart TB
 | 智能对话页 | `/chat` | 对话主界面：消息流（SSE 渲染）+ 结构化卡片（航班卡片带"加入我的航班"、评价卡片带 title/url 来源、酒店/POI 卡片）+ HITL 确认框 + 会话历史侧栏 |
 | 航班页 | `/flights` | 班次查询 + "我的航班"（按用户隔离的 `flight_bookings`，区分 booked / cancelled） |
 | 旅行清单页 | `/travel-list` | 清单列表（名称 / 城市 / 地址 / 备注 / 来源标签），支持手动添加、删除 |
-| 个人配置页 | `/profile` | 用户信息展示 + 「服务配置」区（仅管理员可见）：LLM Key/BaseURL/模型/Temperature、高德 Key、Tavily Key；保存即写服务端热生效；普通用户仅显示"服务配置仅管理员可修改"提示 |
+| 个人配置页 | `/profile` | 用户信息展示 + 「服务配置」区（每用户独立 BYOK）：LLM Key/BaseURL/模型/Temperature、高德 Key、Tavily Key；保存即写入 `user_configs` 表、仅对自己生效；未填写项沿用服务器 `.env` 默认值 |
 
 页面流转：`/` → (有 token) → `/route-planner`；(无 token) → `/login`。全部业务页受 `requiresAuth` 守卫。
 
@@ -268,7 +270,7 @@ flowchart TB
 | `/api/maps/route` | POST | 路线规划 | FR-D2 |
 | `/api/flight/*` | — | 航班查询 / 我的航班 | FR-E1/E3 |
 | `/api/wishlist/*` | — | 清单增删查 | FR-H1 |
-| `/api/config/runtime` | GET/POST | 运行时配置（仅管理员） | FR-I1/I2 |
+| `/api/config/runtime` | GET/POST | 当前登录用户自己的运行时配置（BYOK，未填写回退 `.env`） | FR-I1/I2 |
 | `/api/crawl` | POST | 数据同步（预留） | FR-J3 |
 | `/health` | GET | 健康检查 | FR-J1 |
 
@@ -276,7 +278,7 @@ flowchart TB
 
 | 依赖 | 用途 | 失效降级 |
 | --- | --- | --- |
-| OpenAI 兼容 LLM | 推理核心 | **硬依赖**，未配置则核心功能不可用（`.env` 或管理员配置页均可填） |
+| OpenAI 兼容 LLM | 推理核心 | **硬依赖**，未配置则核心功能不可用（每用户可在配置页自填，未填回退 `.env`） |
 | 高德 Web API | POI / 路线 | 工具报错，Agent 提示用户 |
 | 高德 JS API | 前端地图渲染 | 地图页降级为列表 |
 | Tavily MCP | 联网检索 | 回退本地缓存，未命中则告知无实时数据 |
@@ -284,13 +286,14 @@ flowchart TB
 
 ## 10. 数据库 ER 图
 
-【事实：`app/models/` 下 9 个模型；另有独立 demo 库 `travel_new.sqlite` 存航班班次，不在此 ER 内】
+【事实：`app/models/` 下 10 个模型；另有独立 demo 库 `travel_new.sqlite` 存航班班次，不在此 ER 内】
 
 ```mermaid
 erDiagram
     users ||--o{ itineraries : "创建行程"
     users ||--o{ flight_bookings : "预订航班"
     users ||--o{ travel_wishlist : "收藏清单"
+    users ||--o| user_configs : "每用户服务配置(BYOK)"
     itineraries ||--o{ itinerary_days : "分天"
     itinerary_days ||--o{ itinerary_items : "逐条目"
     pois ||--o{ itinerary_items : "poi_id 弱关联"
@@ -300,13 +303,26 @@ erDiagram
 
     users {
         int id PK
-        string username UK "唯一,索引"
+        string username UK "唯一,索引(去空白+小写归一化)"
         string password_hash "加密存储"
         string phone "可空"
         string email "可空"
         string real_name "可空"
         string preference "可空"
         datetime created_at
+    }
+    user_configs {
+        int id PK
+        int user_id UK "唯一,索引,1:1用户"
+        string openai_api_key "可空"
+        string openai_base_url "可空"
+        string openai_model "可空"
+        string openai_temperature "可空"
+        string amap_web_key "可空"
+        string amap_js_key "可空"
+        string tavily_api_key "可空"
+        string tavily_mcp_command "可空"
+        datetime updated_at
     }
     itineraries {
         int id PK
@@ -422,13 +438,13 @@ erDiagram
 
 | 维度 | 现状 | 扩展路径 | 评估 |
 | --- | --- | --- | --- |
-| LLM 供应商 | OpenAI 兼容协议 + 运行时配置 | 换 Key / BaseURL 即切换，管理员前端热生效 | ★★★★★ |
+| LLM 供应商 | OpenAI 兼容协议 + 运行时配置 | 换 Key / BaseURL 即切换；每用户可自填自己的 Key（BYOK）热生效 | ★★★★★ |
 | Agent 能力 | 子图经 `build_child_graph` 组装，工具经 `bind_tools` 动态绑定 | 新增领域（如火车票、签证）= 新增子图 + 工具文件，不改主链路 | ★★★★☆ |
 | 工具协议 | 路线规划 / 网页搜索已 MCP 化 | 新工具以 MCP Server 暴露即可被 Claude Desktop / Cursor 复用 | ★★★★☆ |
 | 数据库 | SQLAlchemy ORM 屏蔽方言 | SQLite → PostgreSQL 仅改 `DATABASE_URL` | ★★★★☆ |
 | 知识库 | Chroma 集合按类别组织，支持增量补充 | 按目的地扩展集合；`/api/crawl` 预留自动同步入口 | ★★★☆☆ |
 | 水平扩展 | 会话态依赖 Checkpointer（本地） | 需将会话存储迁至 Redis / PostgreSQL；SSE 需粘性会话或网关 | ★★☆☆☆（单机当前够用） |
-| 多租户 | 无完整角色/组织模型（仅 `ADMIN_USERNAMES` 轻量管理员判定） | 需加角色表与数据权限层，改动面较大 | ★★☆☆☆（明确范围外） |
+| 多租户 | 无完整角色/组织模型（仅 `ADMIN_USERNAMES` 轻量管理员判定）；已实现每用户独立配置（`user_configs` 表，BYOK） | 需加角色表与数据权限层，改动面较大 | ★★☆☆☆（明确范围外） |
 
 **结论**：能力扩展性（Agent / 工具 / 供应商）强，符合项目"Agent 工程范式演示"定位；规模化扩展（多机 / 多租户）非当前目标，已列入范围外。
 
@@ -449,7 +465,7 @@ erDiagram
 | --- | --- | --- |
 | 部署可用性 | 一键起三服务 | Docker Compose：前端 3000 为对外入口；后端 8000 / Chroma 8000 / MCP 8001 仅容器内网（`expose`） |
 | 健康检查 | `GET /health` | 已实现 |
-| 会话可恢复 | 刷新不丢对话 | Checkpointer 持久化 + `/chat/history` + `/chat/pending` 恢复中断态 |
+| 会话可恢复 | 刷新不丢对话 | Checkpointer 持久化 + `/chat/history` + `/chat/pending` 恢复中断态；会话按 `user_id` 命名空间隔离，仅本人可恢复 |
 | 优雅降级 | 单一外部依赖失效不整体不可用 | Tavily 失效→本地缓存；高德失效→Agent 提示；LLM 为硬依赖不可降级 |
 | 数据持久 | 容器重建不丢数据 | 数据库与向量库目录被 `.gitignore` 持久化挂载 |
 
@@ -460,7 +476,7 @@ erDiagram
 - JWT access + refresh 双令牌，refresh 可静默续期；
 - 服务端解析 `user_id`，忽略前端身份字段，防水平越权；
 - 敏感写操作 HITL 强制确认；软取消保留审计痕迹（`booking_no`）；
-- Key 服务端持久化（`.env` / 运行时配置），前端仅在配置页（仅管理员）管理；普通用户无法查看或覆盖全局 Key。
+- Key 服务端持久化（`.env` 默认 + 每用户 `user_configs` 表）；前端配置页按 `user_id` 隔离读写，用户只能查看/覆盖自己的 Key，敏感字段脱敏展示。
 
 ### 12.4 可维护性 / 可测试性
 - 分层清晰：api / services / graph / tools / models / schemas；
@@ -473,13 +489,13 @@ erDiagram
 
 ## 14. 验收标准
 
-1. 注册 / 登录 / 刷新 / 鉴权全流程可用，重名返回 409；
+1. 注册 / 登录 / 刷新 / 鉴权全流程可用，重名返回 409（用户名去空白+小写归一化）；
 2. 对话流式输出正常，评价类问题回答带来源（title / url），无凭空编造；
 3. 航班预订 / 改签 / 取消必须出现确认框，确认前不写库；取消后订单仍可查（软取消）；
 4. 刷新页面后对话历史与未完成确认框可恢复；
 5. 行程规划产出分天行程，含时间 / 交通 / 距离字段，顺序经 TSP 优化；
 6. 地图页 POI 搜索与路线可视化正常；
 7. 清单三种来源（manual / assistant / recommend）均可入库并按用户隔离；
-8. 运行时配置保存后即时生效且重启持久；
+8. 运行时配置按用户保存后即时生效且重启持久（BYOK，未填写回退 `.env`）；
 9. `docker compose up --build` 后三端可访问，数据目录持久；
 10. `pytest -q tests` 全部通过。

@@ -246,8 +246,9 @@ const loadRuntimeConfig = async () => {
   try {
     const config = await configApi.getRuntimeConfig()
     runtimeConfig.value = config || {}
-    // 仅当构建期未注入、且运行时返回的是真实 Key（非脱敏）时才采用
-    if (!amapJsKey.value && config?.amap_js_key && !isMasked(config.amap_js_key)) {
+    // BYOK：后端返回的是当前用户（或 .env 兜底）的明文 JS Key，优先于构建期注入，
+    // 这样用户自己填的高德 JS Key 才能真正生效。
+    if (config?.amap_js_key && !isMasked(config.amap_js_key)) {
       amapJsKey.value = config.amap_js_key.trim()
     }
   } catch (error) {

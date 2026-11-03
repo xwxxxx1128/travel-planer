@@ -115,11 +115,14 @@ async def chat_book_flight(
 
 
 @router.get('/chat/pending')
-async def chat_pending(session_id: str):
-    """查看该会话当前是否被中断（待人工确认），用于前端重连后恢复确认框。"""
+async def chat_pending(session_id: str, current: dict = Depends(get_current_user)):
+    """查看该会话当前是否被中断（待人工确认），用于前端重连后恢复确认框。
+
+    会话按 user_id 命名空间隔离：只查询当前登录用户自己的会话。
+    """
     from app.services.langgraph_chat import APPROVAL_PROMPT
 
-    payload = await get_pending_interrupt(session_id)
+    payload = await get_pending_interrupt(current.get('id'), session_id)
     return {
         "interrupted": bool(payload),
         "payload": payload,
@@ -128,6 +131,9 @@ async def chat_pending(session_id: str):
 
 
 @router.get('/chat/history/{session_id}')
-async def chat_history(session_id: str):
-    """返回该会话已持久化的聊天记录，前端刷新页面后调用以恢复对话。"""
-    return {"messages": await get_history(session_id)}
+async def chat_history(session_id: str, current: dict = Depends(get_current_user)):
+    """返回该会话已持久化的聊天记录，前端刷新页面后调用以恢复对话。
+
+    会话按 user_id 命名空间隔离：只返回当前登录用户自己的历史。
+    """
+    return {"messages": await get_history(current.get('id'), session_id)}

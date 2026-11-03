@@ -1,9 +1,12 @@
 ﻿from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Any
+
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.core.runtime_config import get_runtime_config, save_runtime_config
+from app.api.deps import get_current_user
+from app.services.user_config import get_user_config, save_user_config
 
 router = APIRouter()
 
@@ -45,39 +48,50 @@ class RuntimeConfigUpdate(BaseModel):
     tavily_mcp_command: str = Field(default='tavily-mcp')
 
 
-@router.get('/runtime', response_model=RuntimeConfigResponse)
-def read_runtime_config():
-    runtime_config = get_runtime_config()
+def _to_response(cfg: dict[str, str]) -> RuntimeConfigResponse:
+    """构造响应：敏感字段脱敏，但 amap_js_key 必须明文（前端浏览器加载地图要用）。"""
     return RuntimeConfigResponse(
-        openai_api_key=mask_secret(runtime_config.openai_api_key),
-        openai_base_url=runtime_config.openai_base_url,
-        amap_web_key=mask_secret(runtime_config.amap_web_key),
-        amap_js_key=mask_secret(runtime_config.amap_js_key),
+        openai_api_key=mask_secret(cfg.get('openai_api_key', '')),
+        openai_base_url=cfg.get('openai_base_url', ''),
+        openai_model=cfg.get('openai_model', ''),
+        openai_temperature=cfg.get('openai_temperature', ''),
+        amap_web_key=mask_secret(cfg.get('amap_web_key', '')),
+        # 高德 JS Key 设计上就是暴露在网页里的（非机密），且前端地图脚本需要明文加载
+        amap_js_key=cfg.get('amap_js_key', ''),
+        tavily_api_key=mask_secret(cfg.get('tavily_api_key', '')),
+        tavily_mcp_command=cfg.get('tavily_mcp_command', '') or 'tavily-mcp',
     )
+
+
+def _is_masked(value: str) -> bool:
+    """判断是否为脱敏占位符（含 ****），此类值不应覆盖真实配置。"""
+    return bool(value) and '****' in value
+
+
+@router.get('/runtime', response_model=RuntimeConfigResponse)
+def read_runtime_config(
+    current: dict = Depends(get_current_user),
+) -> RuntimeConfigResponse:
+    """返回当前登录用户自己的配置（未填写字段已回退为全局默认值）。"""
+    cfg = get_user_config(current.get('id'))
+    return _to_response(cfg)
 
 
 @router.post('/runtime', response_model=RuntimeConfigResponse)
-def update_runtime_config(payload: RuntimeConfigUpdate):
-    updates: dict[str, str | None] = {}
-
-    # 仅当字段不是脱敏占位符且非空时才更新，避免误清空真实密钥
-    def keep(value: str) -> bool:
-        return bool(value) and value != MASK and not value.startswith('sk-****') and '****' not in value
-
-    updates['openai_api_key'] = payload.openai_api_key if keep(payload.openai_api_key) else None
-    updates['openai_base_url'] = payload.openai_base_url if payload.openai_base_url else None
-    updates['amap_web_key'] = payload.amap_web_key if keep(payload.amap_web_key) else None
-    updates['amap_js_key'] = payload.amap_js_key if keep(payload.amap_js_key) else None
-
-
-    updates['tavily_api_key'] = payload.tavily_api_key if keep(payload.tavily_api_key) else None
-    updates['tavily_mcp_command'] = payload.tavily_mcp_command if payload.tavily_mcp_command else None
-    runtime_config = save_runtime_config(updates)
-    return RuntimeConfigResponse(
-        openai_api_key=mask_secret(runtime_config.openai_api_key),
-        openai_base_url=runtime_config.openai_base_url,
-        amap_web_key=mask_secret(runtime_config.amap_web_key),
-        amap_js_key=mask_secret(runtime_config.amap_js_key),
-        tavily_api_key=mask_secret(runtime_config.tavily_api_key),
-        tavily_mcp_command=runtime_config.tavily_mcp_command,
-    )
+def update_runtime_config(
+    payload: RuntimeConfigUpdate,
+    current: dict = Depends(get_current_user),
+) -> RuntimeConfigResponse:
+    """保存当前登录用户自己的配置；脱敏占位符或空值视为「不修改」。"""
+    updates: dict[str, Any] = {
+        'openai_api_key': payload.openai_api_key if payload.openai_api_key and not _is_masked(payload.openai_api_key) else None,
+        'openai_base_url': payload.openai_base_url if payload.openai_base_url else None,
+        'openai_model': payload.openai_model if payload.openai_model else None,
+        'openai_temperature': payload.openai_temperature if payload.openai_temperature else None,
+        'amap_web_key': payload.amap_web_key if payload.amap_web_key and not _is_masked(payload.amap_web_key) else None,
+        'amap_js_key': payload.amap_js_key if payload.amap_js_key and not _is_masked(payload.amap_js_key) else None,
+        'tavily_api_key': payload.tavily_api_key if payload.tavily_api_key and not _is_masked(payload.tavily_api_key) else None,
+        'tavily_mcp_command': payload.tavily_mcp_command if payload.tavily_mcp_command else None,
+    }
+    cfg = save_user_config(current.get('id'), updates)
+    return _to_response(cfg)

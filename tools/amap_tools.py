@@ -1,6 +1,8 @@
 import httpx
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from app.core.runtime_config import get_runtime_config
+
+from app.services.user_config import resolve_user_config
 
 AMAP_BASE_URL = "https://restapi.amap.com/v3"
 
@@ -9,13 +11,21 @@ AMAP_BASE_URL = "https://restapi.amap.com/v3"
 _amap_client = httpx.Client(timeout=10.0)
 
 
-def get_amap_api_key() -> str:
-    return get_runtime_config().amap_web_key
+def _user_id_from_config(config: RunnableConfig | None) -> int | None:
+    """从 LangChain 运行配置取当前用户 id（BYOK：按用户读取高德 Key）。"""
+    if not config:
+        return None
+    return (config.get("configurable") or {}).get("user_id")
 
 
-def _amap_search_text(keywords, city=None, types=None, page_size=10) -> dict:
+def get_amap_api_key(user_id: int | None = None) -> str:
+    """按用户读取高德 Web Key（未填写回退 .env）。"""
+    return resolve_user_config(user_id).get("amap_web_key", "")
+
+
+def _amap_search_text(keywords, city=None, types=None, page_size=10, user_id=None) -> dict:
     """调用高德地点搜索接口，返回结构化字典（含 status / info / pois）。"""
-    amap_api_key = get_amap_api_key()
+    amap_api_key = get_amap_api_key(user_id)
     if not amap_api_key:
         return {
             "status": "0",
@@ -50,8 +60,8 @@ def _amap_search_text(keywords, city=None, types=None, page_size=10) -> dict:
 
 
 @tool(description="根据关键词在高德地图搜索 POI（如酒店、景点），返回格式化文本结果。")
-def amap_search_poi(keywords, city=None, types=None, page_size=10) -> str:
-    data = _amap_search_text(keywords, city, types, page_size)
+def amap_search_poi(keywords, city=None, types=None, page_size=10, config: RunnableConfig = None) -> str:
+    data = _amap_search_text(keywords, city, types, page_size, _user_id_from_config(config))
     if data.get("status") != "1":
         return f"高德地图查询失败: {data.get('info', '未知错误')}"
     results = []
@@ -71,14 +81,14 @@ def amap_search_poi(keywords, city=None, types=None, page_size=10) -> str:
     return str(results)
 
 
-def amap_search_poi_raw(keywords, city=None, types=None, page_size=10) -> dict:
+def amap_search_poi_raw(keywords, city=None, types=None, page_size=10, user_id=None) -> dict:
     """结构化版本：直接返回高德原始 POI 字典列表，供后端服务取用。"""
-    return _amap_search_text(keywords, city, types, page_size)
+    return _amap_search_text(keywords, city, types, page_size, user_id)
 
 
 @tool(description="在高德地图中搜索指定坐标周边的 POI（景点/餐厅/酒店等），适合根据落点推荐附近去处。")
-def amap_search_around(location, keywords="", radius=1000, types="") -> str:
-    amap_api_key = get_amap_api_key()
+def amap_search_around(location, keywords="", radius=1000, types="", config: RunnableConfig = None) -> str:
+    amap_api_key = get_amap_api_key(_user_id_from_config(config))
     if not amap_api_key:
         return "缺少高德地图 API Key，请在 .env 中配置 AMAP_WEB_API_KEY。"
     params = {
@@ -120,8 +130,8 @@ def amap_search_around(location, keywords="", radius=1000, types="") -> str:
 
 
 @tool(description="根据地址进行地理编码，返回经纬度等位置信息。")
-def amap_geocode(address) -> str:
-    amap_api_key = get_amap_api_key()
+def amap_geocode(address, config: RunnableConfig = None) -> str:
+    amap_api_key = get_amap_api_key(_user_id_from_config(config))
     if not amap_api_key:
         return "缺少高德地图 API Key，请在 .env 中配置 AMAP_WEB_API_KEY。"
     try:
@@ -151,9 +161,9 @@ def amap_geocode(address) -> str:
 # --------------------------------------------------------------------------- #
 # 结构化辅助函数（供后端 API 路由直接调用，返回 dict 而非字符串）
 # --------------------------------------------------------------------------- #
-def amap_geocode_raw(address: str, city: str = "") -> dict:
+def amap_geocode_raw(address: str, city: str = "", user_id=None) -> dict:
     """地理编码，返回结构化字典；前端 /api/geocode/ 使用。"""
-    amap_api_key = get_amap_api_key()
+    amap_api_key = get_amap_api_key(user_id)
     if not amap_api_key:
         return {"success": False, "message": "缺少高德地图 API Key"}
     params = {"address": address, "key": amap_api_key}
@@ -180,9 +190,9 @@ def amap_geocode_raw(address: str, city: str = "") -> dict:
     return {"success": False, "message": data.get("info", "未找到地址")}
 
 
-def amap_reverse_geocode(lng: float, lat: float) -> dict:
+def amap_reverse_geocode(lng: float, lat: float, user_id=None) -> dict:
     """逆地理编码：经纬度 -> 地址信息；前端 /api/reverse-geocode/ 使用。"""
-    amap_api_key = get_amap_api_key()
+    amap_api_key = get_amap_api_key(user_id)
     if not amap_api_key:
         return {"success": False, "message": "缺少高德地图 API Key"}
     location = f"{lng},{lat}"
@@ -213,9 +223,9 @@ def amap_reverse_geocode(lng: float, lat: float) -> dict:
     return {"success": False, "message": data.get("info", "逆地理编码失败")}
 
 
-def amap_inputtips(keywords: str, city: str = "") -> dict:
+def amap_inputtips(keywords: str, city: str = "", user_id=None) -> dict:
     """高德输入提示（智能匹配推荐）；前端 /api/inputtips/ 使用。"""
-    amap_api_key = get_amap_api_key()
+    amap_api_key = get_amap_api_key(user_id)
     if not amap_api_key:
         return {"success": False, "message": "缺少高德地图 API Key", "tips": []}
     params = {"key": amap_api_key, "keywords": keywords, "output": "json"}
@@ -244,9 +254,9 @@ def amap_inputtips(keywords: str, city: str = "") -> dict:
     return {"success": False, "message": data.get("info", "输入提示获取失败"), "tips": []}
 
 
-def amap_search_around_raw(location: str, radius: int = 1000, types: str = "", limit: int = 10) -> dict:
+def amap_search_around_raw(location: str, radius: int = 1000, types: str = "", limit: int = 10, user_id=None) -> dict:
     """结构化周边搜索；前端 /api/nearby-poi/ 使用，返回 {success, pois}。"""
-    amap_api_key = get_amap_api_key()
+    amap_api_key = get_amap_api_key(user_id)
     if not amap_api_key:
         return {"success": False, "message": "缺少高德地图 API Key", "pois": []}
     params = {

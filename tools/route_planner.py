@@ -9,12 +9,19 @@ from typing import Any, Dict, List, Optional, Tuple
 from tools.mcp_route_client import RouteMcpClient
 
 import httpx
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from app.core.runtime_config import get_runtime_config
+from app.services.user_config import resolve_user_config
 
-def get_amap_key() -> str:
-    return get_runtime_config().amap_web_key
+def _user_id_from_config(config: RunnableConfig | None):
+    if not config:
+        return None
+    return (config.get("configurable") or {}).get("user_id")
+
+
+def get_amap_key(user_id=None) -> str:
+    return resolve_user_config(user_id).get("amap_web_key", "")
 SUPPORTED_ROUTE_MODES = {"driving", "walking", "transit"}
 MODE_LABELS = {
     "driving": "驾车",
@@ -72,8 +79,8 @@ def _fallback_segment(origin: Dict[str, Any], destination: Dict[str, Any], mode:
     }
 
 
-def _geocode_point(point: str) -> Dict[str, Any]:
-    amap_key = get_amap_key()
+def _geocode_point(point: str, user_id=None) -> Dict[str, Any]:
+    amap_key = get_amap_key(user_id)
     if not amap_key:
         raise ValueError("未配置高德地图API Key")
 
@@ -94,9 +101,9 @@ def _geocode_point(point: str) -> Dict[str, Any]:
     raise ValueError(f"无法找到地点 '{point}' 的坐标")
 
 
-def _parse_point_value(point: str | Dict[str, Any]) -> Dict[str, Any]:
+def _parse_point_value(point: str | Dict[str, Any], user_id=None) -> Dict[str, Any]:
     if isinstance(point, str):
-        return _geocode_point(point)
+        return _geocode_point(point, user_id)
 
     name = point.get("name") or point.get("address") or "未命名地点"
     location = point.get("location")
@@ -122,7 +129,7 @@ def _parse_point_value(point: str | Dict[str, Any]) -> Dict[str, Any]:
             "lat": float(lat),
         }
 
-    return _geocode_point(name)
+    return _geocode_point(name, user_id)
 
 
 def _decode_amap_polyline(polyline_str: str) -> list:
@@ -164,13 +171,13 @@ def _collect_path_from_driving_steps(path_item: dict) -> list:
 _adcode_cache: Dict[str, str] = {}
 
 
-def _adcode_of(location: str) -> str:
+def _adcode_of(location: str, user_id=None) -> str:
     """根据经纬度反查所在城市 adcode（高德 transit 公交规划接口必须传 city 参数）。"""
     if not location:
         return ""
     if location in _adcode_cache:
         return _adcode_cache[location]
-    amap_key = get_amap_key()
+    amap_key = get_amap_key(user_id)
     adcode = ""
     if amap_key:
         try:
@@ -192,9 +199,9 @@ def _adcode_of(location: str) -> str:
     return adcode
 
 
-def _direction_segment(origin: Dict[str, Any], destination: Dict[str, Any], mode: str) -> Dict[str, Any]:
+def _direction_segment(origin: Dict[str, Any], destination: Dict[str, Any], mode: str, user_id=None) -> Dict[str, Any]:
     mode = (mode or "driving").lower()
-    amap_key = get_amap_key()
+    amap_key = get_amap_key(user_id)
 
     # 智能模式：先用本地估算挑选最合适的交通方式，再调用真实接口
     if mode == "smart":
@@ -212,7 +219,7 @@ def _direction_segment(origin: Dict[str, Any], destination: Dict[str, Any], mode
         "output": "json",
     }
     if route_mode == "transit/integrated":
-        city = _adcode_of(origin["location"])
+        city = _adcode_of(origin["location"], user_id)
         if city:
             params["city"] = city
 
@@ -370,7 +377,7 @@ def _build_route_result(
     }
 
 
-def optimize_route(locations: List[Dict[str, Any]], transport_mode: str = "driving", fixed_end_index: int | None = None) -> Dict[str, Any]:
+def optimize_route(locations: List[Dict[str, Any]], transport_mode: str = "driving", fixed_end_index: int | None = None, user_id=None) -> Dict[str, Any]:
     if len(locations) <= 1:
         point = locations[0]
         return {
@@ -402,6 +409,7 @@ def optimize_route(locations: List[Dict[str, Any]], transport_mode: str = "drivi
                 locations[o],
                 locations[d],
                 route_mode,
+                user_id,
             )
             for (o, d) in pairs
         }
@@ -530,8 +538,9 @@ def plan_route_core(
     start_point: str | Dict[str, Any] = "",
     end_point: str | Dict[str, Any] = "",
     transport_mode: str = "driving",
+    user_id=None,
 ) -> Dict[str, Any]:
-    amap_key = get_amap_key()
+    amap_key = get_amap_key(user_id)
     if not amap_key:
         raise ValueError("未配置高德地图API Key")
 
@@ -541,37 +550,37 @@ def plan_route_core(
     locations: List[Dict[str, Any]] = []
 
     if start_point:
-        start_location = _parse_point_value(start_point)
+        start_location = _parse_point_value(start_point, user_id)
         start_location["kind"] = "start"
         locations.append(start_location)
 
     for point in destinations:
-        destination_location = _parse_point_value(point)
+        destination_location = _parse_point_value(point, user_id)
         destination_location["kind"] = "destination"
         locations.append(destination_location)
 
     fixed_end_index = None
     if end_point:
-        end_location = _parse_point_value(end_point)
+        end_location = _parse_point_value(end_point, user_id)
         end_location["kind"] = "end"
         locations.append(end_location)
         fixed_end_index = len(locations) - 1
 
-    result = optimize_route(locations, transport_mode=transport_mode, fixed_end_index=fixed_end_index)
+    result = optimize_route(locations, transport_mode=transport_mode, fixed_end_index=fixed_end_index, user_id=user_id)
     result["start_point"] = locations[0]["name"] if start_point else ""
     result["end_point"] = locations[-1]["name"] if end_point else ""
     return result
 
 
-def get_route_distance_core(origin: str, destination: str, transport_mode: str = "driving") -> Dict[str, Any]:
-    amap_key = get_amap_key()
+def get_route_distance_core(origin: str, destination: str, transport_mode: str = "driving", user_id=None) -> Dict[str, Any]:
+    amap_key = get_amap_key(user_id)
     if not amap_key:
         raise ValueError("未配置高德地图API Key")
 
-    origin_location = _parse_point_value(origin)
-    destination_location = _parse_point_value(destination)
+    origin_location = _parse_point_value(origin, user_id)
+    destination_location = _parse_point_value(destination, user_id)
     route_mode = _normalize_mode(transport_mode)
-    segment = _direction_segment(origin_location, destination_location, route_mode)
+    segment = _direction_segment(origin_location, destination_location, route_mode, user_id)
 
     return {
         "from": origin_location["name"],
@@ -586,12 +595,12 @@ def get_route_distance_core(origin: str, destination: str, transport_mode: str =
 
 
 @tool(description="路径规划工具，根据多个地点之间的交通方式规划最佳路线")
-def plan_route(destinations: List[str], start_point: str = "", transport_mode: str = "driving") -> str:
+def plan_route(destinations: List[str], start_point: str = "", transport_mode: str = "driving", config: RunnableConfig = None) -> str:
     """
     规划多个地点之间的最佳路线。
     """
     try:
-        result = plan_route_core(destinations, start_point, transport_mode)
+        result = plan_route_core(destinations, start_point, "", transport_mode, _user_id_from_config(config))
         return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as e:
         return f"路径规划失败：{str(e)}"

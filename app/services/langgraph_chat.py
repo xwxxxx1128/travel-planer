@@ -44,22 +44,23 @@ from app.services.flight_intent import (
     no_flight_context,
     to_card_flights,
 )
-from graph_chat.assistant import (
+from app.graph_chat.assistant import (
     tripAssistant,
-    assistant_runnable,
+    primary_assistant_prompt,
     primary_assistant_tools,
+    PRIMARY_TOOLS,
 )
-from graph_chat.base_data_model import (
+from app.graph_chat.base_data_model import (
     ToTravelList,
     ToFlightBookingAssistant,
     ToHotelBookingAssistant,
 )
-from graph_chat.build_child_graph import (
+from app.graph_chat.build_child_graph import (
     build_flight_graph,
     builder_hotel_graph,
     builder_travel_list_graph,
 )
-from graph_chat.state import State
+from app.graph_chat.state import State
 from tools.tools_handler import create_tool_node_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -117,7 +118,7 @@ _READONLY_TOOLS = {
 # 以 {session_id: {tool_call_id, ...}} 形式持久化到 data/ 目录，进程重启后依然有效。
 # --------------------------------------------------------------------------- #
 _APPROVAL_LEDGER_PATH = BASE_DIR / "data" / "approval_ledger.json"
-_approval_ledger: Dict[str, set] = {}
+_approval_ledger: Dict[str, set] = {}  # pyright: ignore[reportMissingTypeArgument]
 
 
 def _load_approval_ledger() -> None:
@@ -206,7 +207,7 @@ def _build_graph():
     builder = builder_hotel_graph(builder)
     builder = builder_travel_list_graph(builder)
 
-    builder.add_node("primary_assistant", tripAssistant(assistant_runnable))
+    builder.add_node("primary_assistant", tripAssistant(primary_assistant_prompt, PRIMARY_TOOLS))
     builder.add_node(
         "primary_assistant_tools",
         create_tool_node_with_fallback(primary_assistant_tools),
@@ -264,16 +265,29 @@ _load_approval_ledger()
 # --------------------------------------------------------------------------- #
 # 会话辅助
 # --------------------------------------------------------------------------- #
+def _scoped_session_id(user_id: Optional[int], session_id: str) -> str:
+    """把会话 id 限定到当前用户命名空间，杜绝跨用户读取会话。
+
+    会话定位（thread_id / 历史文件 / 审批台账）一律使用该作用域值：user_id 存在时
+    前缀 "user_id:"，前端传来的 session_id 仅在当前用户命名空间内生效。
+    user_id 为 None 时回退为裸 session_id（兼容历史数据）。
+    """
+    if user_id is None:
+        return session_id or "default"
+    return f"{user_id}:{session_id or 'default'}"
+
+
 def _make_config(session_id: str, user_id: Optional[int] = None) -> Dict[str, Any]:
     """构造图运行配置。
 
     额外注入：
     - user_id：按用户隔离的数据（旅行清单、个人航班订单）对话工具据此定位当前用户；
-    - session_id：供审批台账 _pending_confirm 按会话去重（刷新后不重复弹框）。
+    - thread_id / session_id：均取 user_id 命名空间后的作用域值，保证会话跨用户隔离。
     """
+    scoped = _scoped_session_id(user_id, session_id)
     configurable: Dict[str, Any] = {
-        "thread_id": session_id,
-        "session_id": session_id,
+        "thread_id": scoped,
+        "session_id": scoped,
     }
     # 用户身份由服务端按登录令牌解析后注入，对话工具据此按用户隔离地读写数据。
     if user_id is not None:
@@ -358,11 +372,12 @@ async def stream_chat_events(req: Dict[str, Any]):
     事件以 SSE 的 `data: {json}\\n\\n` 形式 yield 出去。
     """
     session_id = req.get("session_id") or "default"
+    user_id = req.get("user_id")
     message = (req.get("message") or "").strip()
     # 立即落盘用户提问：即使客户端中途刷新/断开，问题也不会丢
     if message:
-        await asyncio.to_thread(_append_message, session_id, {"role": "user", "text": message})
-    config = _make_config(session_id, req.get("user_id"))
+        await asyncio.to_thread(_append_message, user_id, session_id, {"role": "user", "text": message})
+    config = _make_config(session_id, user_id)
 
     # ---- 方案3：评价意图 → 确定性预检索（不依赖模型“自觉”调用工具） ----
     # 命中评价意图时直接调 fetch_tavily_reviews（内部先查库、未命中再 Tavily、随后落库），
@@ -376,7 +391,7 @@ async def stream_chat_events(req: Dict[str, Any]):
         yield _sse_payload({"type": "status", "text": f"正在检索「{poi}」相关评价…"})
         try:
             prefetch_ctx, prefetch_reviews = await asyncio.wait_for(
-                asyncio.to_thread(build_material_context, poi, city),
+                asyncio.to_thread(build_material_context, poi, city, req.get("user_id")),
                 timeout=_REVIEW_PREFETCH_TIMEOUT,
             )
         except asyncio.TimeoutError:
@@ -558,7 +573,7 @@ async def stream_chat_events(req: Dict[str, Any]):
                 if chunk:
                     full_reply += chunk
                     if len(full_reply) - last_persist_len >= 500:
-                        await asyncio.to_thread(_upsert_assistant, session_id, full_reply, None)
+                        await asyncio.to_thread(_upsert_assistant, user_id, session_id, full_reply, None)
                         last_persist_len = len(full_reply)
             yield _sse_payload(item)
 
@@ -726,13 +741,22 @@ except Exception:  # noqa: BLE001
 _chat_store_lock = threading.Lock()
 
 
-def _safe_session_file(session_id: str) -> Path:
-    safe = "".join(ch for ch in session_id if ch.isalnum() or ch in "-_") or "default"
+def _safe_session_file(user_id: Optional[int], session_id: str) -> Path:
+    """返回会话历史文件路径，按 user_id 命名空间隔离（文件名不允许冒号，用下划线）。"""
+    scoped = _scoped_session_id(user_id, session_id)
+    safe = "".join(ch for ch in scoped if ch.isalnum() or ch in ":_-") or "default"
+    safe = safe.replace(":", "_")
     return _CHAT_HISTORY_DIR / f"{safe}.json"
 
 
-def _load_messages(session_id: str) -> List[Dict[str, Any]]:
-    path = _safe_session_file(session_id)
+def _load_messages(user_id: Optional[int], session_id: str) -> List[Dict[str, Any]]:
+    path = _safe_session_file(user_id, session_id)
+    # 兼容改造前的旧文件命名（裸 session_id，即 username）：新名不存在时回退读旧名，
+    # 使已产生的历史在升级后仍可恢复；后续写入统一走新名，旧文件不再增长。
+    if not path.exists() and user_id is not None:
+        legacy = _safe_session_file(None, session_id)
+        if legacy.exists():
+            path = legacy
     if not path.exists():
         return []
     try:
@@ -743,10 +767,10 @@ def _load_messages(session_id: str) -> List[Dict[str, Any]]:
         return []
 
 
-def _append_message(session_id: str, message: Dict[str, Any]) -> None:
-    path = _safe_session_file(session_id)
+def _append_message(user_id: Optional[int], session_id: str, message: Dict[str, Any]) -> None:
+    path = _safe_session_file(user_id, session_id)
     with _chat_store_lock:
-        messages = _load_messages(session_id)
+        messages = _load_messages(user_id, session_id)
         messages.append(message)
         tmp = path.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as fh:
@@ -755,6 +779,7 @@ def _append_message(session_id: str, message: Dict[str, Any]) -> None:
 
 
 def _upsert_assistant(
+    user_id: Optional[int],
     session_id: str,
     assistant_text: str,
     confirm=None,
@@ -769,9 +794,9 @@ def _upsert_assistant(
     """
     if not assistant_text:
         return
-    path = _safe_session_file(session_id)
+    path = _safe_session_file(user_id, session_id)
     with _chat_store_lock:
-        messages = _load_messages(session_id)
+        messages = _load_messages(user_id, session_id)
         entry = {
             "role": "assistant",
             "text": assistant_text,
@@ -808,7 +833,7 @@ async def _persist_stream_result(
     text = (reply or "").strip() or (APPROVAL_PROMPT if pending else "")
     if not text:
         return
-    await asyncio.to_thread(_upsert_assistant, session_id, text, confirm, reviews, flights)
+    await asyncio.to_thread(_upsert_assistant, req.get("user_id"), session_id, text, confirm, reviews, flights)
 
 
 # --------------------------------------------------------------------------- #
@@ -834,13 +859,14 @@ async def handle_chat(req: Dict[str, Any]) -> Dict[str, Any]:
     # ---- 方案3：评价意图 → 确定性预检索（详见 stream_chat_events 同名逻辑） ----
     prefetch_ctx: Optional[str] = None
     prefetch_reviews: List[Dict[str, Any]] = []
+    flight_cards: List[Dict[str, Any]] = []  # 非流式接口不预检索航班，兜底为空列表
     review_intent = detect_review_intent(message)
     if review_intent:
         poi, city = review_intent
         logger.info("检测到评价意图 poi=%s city=%s，执行确定性预检索", poi, city or "-")
         try:
             prefetch_ctx, prefetch_reviews = await asyncio.wait_for(
-                asyncio.to_thread(build_material_context, poi, city),
+                asyncio.to_thread(build_material_context, poi, city, req.get("user_id")),
                 timeout=_REVIEW_PREFETCH_TIMEOUT,
             )
         except asyncio.TimeoutError:
@@ -887,9 +913,10 @@ async def handle_chat(req: Dict[str, Any]) -> Dict[str, Any]:
         }
     )
     # 持久化本轮对话（用户提问 + 助手回复），保证刷新页面后可恢复
-    await asyncio.to_thread(_append_message, session_id, {"role": "user", "text": message})
+    await asyncio.to_thread(_append_message, req.get("user_id"), session_id, {"role": "user", "text": message})
     await asyncio.to_thread(
         _append_message,
+        req.get("user_id"),
         session_id,
         {
             "role": "assistant",
@@ -1007,6 +1034,7 @@ async def resume_chat(
     # 持久化助手在恢复操作后的回复
     await asyncio.to_thread(
         _append_message,
+        user_id,
         session_id,
         {
             "role": "assistant",
@@ -1090,14 +1118,14 @@ async def prepare_flight_booking(
     return resp
 
 
-async def get_pending_interrupt(session_id: str) -> dict | None:
-    return _pending_confirm(_make_config(session_id))
+async def get_pending_interrupt(user_id: Optional[int], session_id: str) -> dict | None:
+    return _pending_confirm(_make_config(session_id, user_id))
 
 
-async def get_history(session_id: str) -> List[Dict[str, Any]]:
+async def get_history(user_id: Optional[int], session_id: str) -> List[Dict[str, Any]]:
     """返回该会话已持久化的聊天记录（来源为独立 JSON 存储，刷新页面可恢复）。
 
     返回结构与前端期望一致：每条消息含 role（user/assistant）与 text，
     以及可选的结构化字段 reviews/flights/hotels/confirm。
     """
-    return await asyncio.to_thread(_load_messages, session_id)
+    return await asyncio.to_thread(_load_messages, user_id, session_id)

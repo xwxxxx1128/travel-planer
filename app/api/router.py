@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user
 from app.api.routers.auth import router as auth_router
 from app.api.routers.maps import router as maps_router
 from app.api.routers.legacy_user import router as legacy_user_router
@@ -23,7 +23,7 @@ api_router.include_router(crawl_router, prefix='/crawl', tags=['crawl'], depende
 
 api_router.include_router(chat_router, tags=['chat'], dependencies=_protected)
 api_router.include_router(maps_router, tags=['maps'], dependencies=_protected)
-api_router.include_router(config_router, prefix='/config', tags=['config'], dependencies=[Depends(require_admin)])
+api_router.include_router(config_router, prefix='/config', tags=['config'], dependencies=_protected)
 api_router.include_router(wishlist_router, prefix='/wishlist', tags=['wishlist'], dependencies=_protected)
 api_router.include_router(flight_router, prefix='/flights', tags=['flights'], dependencies=_protected)
 
