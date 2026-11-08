@@ -1,0 +1,46 @@
+server {
+    listen 80;
+    server_name YOUR_DOMAIN;
+    server_tokens off;
+
+    access_log /var/log/nginx/trip_access.log;
+    error_log /var/log/nginx/trip_error.log warn;
+
+    # Serve ACME HTTP-01 challenge files from the certbot webroot.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    # Drop requests from common vulnerability scanners and automated probes.
+    if ($http_user_agent ~* "(libredtail|sqlmap|nikto|nmap|masscan|zgrab|gobuster|ffuf|dirbuster|wpscan|nuclei)") {
+        return 444;
+    }
+
+    # Reject dot-prefixed path segments, except the ACME challenge location above.
+    location ~ (^|/)\. {
+        return 444;
+    }
+
+    # Reject common server-side script probes.
+    location ~* \.(php|asp|aspx|jsp|cgi)$ {
+        return 444;
+    }
+
+    # The FastAPI app serves both the API and frontend/dist.
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Preserve streaming responses such as the chat SSE endpoint.
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 540s;
+        proxy_send_timeout 540s;
+    }
+}
