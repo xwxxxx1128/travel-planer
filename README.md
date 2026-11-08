@@ -18,6 +18,7 @@
   - [6.2 启动后端](#62-启动后端)
   - [6.3 启动前端](#63-启动前端)
   - [6.4 后端直接托管前端页面](#64-后端直接托管前端页面)
+  - [6.5 Linux systemd 托管（非 Docker）](#65-linux-systemd-托管非-docker)
 - [7. Docker Compose 一键部署](#7-docker-compose-一键部署)
 - [8. 环境变量说明](#8-环境变量说明)
 - [9. 核心架构](#9-核心架构)
@@ -168,6 +169,20 @@ python main.py
 ```
 
 存在 `dist` 时，根路径 `/` 会重定向到 `/ui` 返回前端页面。
+
+### 6.5 Linux systemd 托管（非 Docker）
+
+`deploy/trip.service.example` 是 systemd unit 模板。先在服务器上完成 Python 依赖安装、前端构建，并确认项目根目录存在 `.env`。然后将模板复制为 `/etc/systemd/system/trip.service`，把其中的 `YOUR_LINUX_USER` 和 `/opt/trip_assistant_L` 替换为服务器上的运行用户和项目实际路径；模板中的虚拟环境路径默认是项目下的 `.venv`。
+
+```bash
+sudo cp deploy/trip.service.example /etc/systemd/system/trip.service
+sudo nano /etc/systemd/system/trip.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now trip.service
+sudo systemctl status trip.service
+```
+
+服务通过 Uvicorn 直接启动 FastAPI，不会运行 `main.py` 中的前端自动构建和打开浏览器逻辑。前端仍由后端托管 `frontend/dist`，因此更新前端后需要重新构建再重启服务。查看日志可用 `sudo journalctl -u trip.service -f`；停止服务可用 `sudo systemctl stop trip.service`。`.env` 只留在服务器上，不要提交到 Git；systemd 会通过 `EnvironmentFile` 读取其中的环境变量。
 
 ---
 

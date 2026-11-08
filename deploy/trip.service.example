@@ -1,0 +1,19 @@
+[Unit]
+Description=Trip Planner API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_LINUX_USER
+Group=YOUR_LINUX_USER
+WorkingDirectory=/opt/trip_assistant_L
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/trip_assistant_L/.env
+ExecStart=/opt/trip_assistant_L/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
