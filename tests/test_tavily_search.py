@@ -39,8 +39,8 @@ class _FakeSession:
 class _FakeClient(TavilyMcpClient):
     """覆盖 connect，避免真正拉起 tavily-mcp 子进程。"""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, api_key="", mcp_command=""):
+        super().__init__(api_key=api_key, mcp_command=mcp_command)
         self._recorded = []
 
     async def connect(self):

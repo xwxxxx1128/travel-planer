@@ -24,7 +24,7 @@ def _runs_without_raising(fn):
 def test_tool_degradation_success_rate(monkeypatch):
     """触发各工具异常路径，统计优雅降级成功率。"""
     # 1) 高德 POI 搜索：无 Key → 返回失败提示（不抛异常）
-    monkeypatch.setattr("tools.amap_tools.get_amap_api_key", lambda: "")
+    monkeypatch.setattr("tools.amap_tools.get_amap_api_key", lambda user_id=None: "")
 
     cases = []
     # amap_search_poi 无 Key
