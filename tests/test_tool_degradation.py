@@ -30,7 +30,7 @@ def test_tool_degradation_success_rate(monkeypatch):
     # amap_search_poi 无 Key
     cases.append(("amap_search_poi.no_key", lambda: amap_search_poi.invoke({"keywords": "酒店"})))
     # amap_get_weather 无 Key
-    monkeypatch.setattr("tools.weather_tools.get_amap_key", lambda: "")
+    monkeypatch.setattr("tools.weather_tools.get_amap_key", lambda user_id=None: "")
     cases.append(("amap_get_weather.no_key", lambda: amap_get_weather.invoke({"location": "北京"})))
 
     # 2) 路线规划：核心函数抛异常 → plan_route 捕获并返回「路径规划失败」
@@ -46,16 +46,18 @@ def test_tool_degradation_success_rate(monkeypatch):
     async def _fake_get_client():
         return _ErrClient()
     monkeypatch.setattr(route_planner, "_get_route_mcp_client", _fake_get_client)
+    route_distance_coroutine = getattr(route_planner.get_route_distance, "coroutine")
     cases.append((
         "get_route_distance.exception",
-        lambda: asyncio.run(route_planner.get_route_distance.coroutine("A", "B")),
+        lambda: asyncio.run(route_distance_coroutine("A", "B")),
     ))
 
     # 4) 评价检索：Tavily 无结果 → 返回「未检索到」
     async def _empty_reviews(*a, **k):
         return []
     monkeypatch.setattr("tools.reviews_tools.fetch_tavily_reviews", _empty_reviews)
-    cases.append(("search_reviews.empty", lambda: asyncio.run(search_reviews.coroutine("故宫"))))
+    search_reviews_coroutine = getattr(search_reviews, "coroutine")
+    cases.append(("search_reviews.empty", lambda: asyncio.run(search_reviews_coroutine("故宫"))))
 
     # 5) 政策 RAG：Chroma 不可用 → 降级 numpy 内存向量（返回非空，不抛异常）
     from unittest.mock import MagicMock

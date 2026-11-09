@@ -31,7 +31,9 @@ def test_route_mcp_stdio_handshake_and_tools(monkeypatch):
 
     async def run():
         async with RouteMcpClient() as client:
-            tools = await client._session.list_tools()
+            session = client._session
+            assert session is not None
+            tools = await session.list_tools()
             return sorted(t.name for t in tools.tools)
 
     names = asyncio.run(run())
